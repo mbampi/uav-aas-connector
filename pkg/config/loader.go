@@ -16,6 +16,9 @@ type Config struct {
 
 type AdapterConfig struct {
 	// Define adapter configuration fields here
+	Connection  string
+	Address     string
+	MappingFile string
 }
 
 type ExporterConfig struct {
