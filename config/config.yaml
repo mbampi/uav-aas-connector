@@ -10,13 +10,16 @@ adapter:
   mappingFile: "config/mappings/mavlink.yaml"
 
 exporters:
-#   http:
-#     enabled: true
-#     port: 8080
+  dummy:
+    enabled: true
+
+  http:
+    enabled: false
+    port: 8080
     
-#   opcua:
-#     enabled: true
-#     port: 4840
+  opcua:
+    enabled: false
+    port: 4840
   
 advanced:
   log_level: "debug"

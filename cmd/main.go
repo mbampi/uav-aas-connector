@@ -50,7 +50,8 @@ func main() {
 	for _, exporterCfg := range cfg.OutputExporters {
 		exporter, err := exporters.NewOutputExporter(exporterCfg)
 		if err != nil {
-			log.Fatalf("Failed to create exporter: %v", err)
+			log.Printf("Failed to create exporter: %v", err)
+			continue
 		}
 		go func(exp exporters.OutputExporter) {
 			aasUpdateChan, err := coreInstance.Subscribe(ctx)

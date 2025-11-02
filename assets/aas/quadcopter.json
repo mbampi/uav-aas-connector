@@ -36,6 +36,42 @@
                             "value": "urn:submodel:status:001"
                         }
                     ]
+                },
+                {
+                    "type": "ModelReference",
+                    "keys": [
+                        {
+                            "type": "Submodel",
+                            "value": "urn:submodel:power:001"
+                        }
+                    ]
+                },
+                {
+                    "type": "ModelReference",
+                    "keys": [
+                        {
+                            "type": "Submodel",
+                            "value": "urn:submodel:navigation:001"
+                        }
+                    ]
+                },
+                {
+                    "type": "ModelReference",
+                    "keys": [
+                        {
+                            "type": "Submodel",
+                            "value": "urn:submodel:attitude:001"
+                        }
+                    ]
+                },
+                {
+                    "type": "ModelReference",
+                    "keys": [
+                        {
+                            "type": "Submodel",
+                            "value": "urn:submodel:hud:001"
+                        }
+                    ]
                 }
             ]
         }
@@ -65,20 +101,6 @@
                     "modelType": "Property",
                     "valueType": "xs:string",
                     "value": "Quadcopter Model X1"
-                },
-                {
-                    "idShort": "SerialNumber",
-                    "category": "PARAMETER",
-                    "modelType": "Property",
-                    "valueType": "xs:string",
-                    "value": "QC001-2024-001"
-                },
-                {
-                    "idShort": "ManufacturingYear",
-                    "category": "PARAMETER",
-                    "modelType": "Property",
-                    "valueType": "xs:int",
-                    "value": "2024"
                 }
             ]
         },
@@ -89,7 +111,7 @@
             "description": [
                 {
                     "language": "en",
-                    "text": "Current status and operational state"
+                    "text": "Current status and operational state from HEARTBEAT"
                 }
             ],
             "submodelElements": [
@@ -98,52 +120,192 @@
                     "category": "VARIABLE",
                     "modelType": "Property",
                     "valueType": "xs:int",
-                    "value": "2",
-                    "description": [
-                        {
-                            "language": "en",
-                            "text": "MAVLink vehicle type (2 = Quadrotor)"
-                        }
-                    ]
+                    "value": "0"
                 },
                 {
                     "idShort": "AutopilotType",
                     "category": "VARIABLE",
                     "modelType": "Property",
                     "valueType": "xs:int",
-                    "value": "0",
-                    "description": [
-                        {
-                            "language": "en",
-                            "text": "MAVLink autopilot type (0 = Generic)"
-                        }
-                    ]
+                    "value": "0"
                 },
                 {
                     "idShort": "SystemStatus",
                     "category": "VARIABLE",
                     "modelType": "Property",
                     "valueType": "xs:int",
-                    "value": "4",
-                    "description": [
-                        {
-                            "language": "en",
-                            "text": "System status (4 = Active)"
-                        }
-                    ]
-                },
+                    "value": "0"
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:power:001",
+            "idShort": "Power",
+            "modelType": "Submodel",
+            "description": [
                 {
-                    "idShort": "SystemTime",
+                    "language": "en",
+                    "text": "Battery and power system status from SYS_STATUS"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Voltage",
                     "category": "VARIABLE",
                     "modelType": "Property",
                     "valueType": "xs:double",
-                    "value": "0",
-                    "description": [
-                        {
-                            "language": "en",
-                            "text": "System time in Unix seconds"
-                        }
-                    ]
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Current",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Remaining",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "100"
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:navigation:001",
+            "idShort": "Navigation",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Position, altitude, and heading from GLOBAL_POSITION_INT"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Latitude",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Longitude",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "AltitudeMSL",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "AltitudeRelative",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Heading",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:attitude:001",
+            "idShort": "Attitude",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Vehicle orientation from ATTITUDE"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Roll",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Pitch",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Yaw",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:hud:001",
+            "idShort": "HUD",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Heads-Up Display data from VFR_HUD"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Airspeed",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Groundspeed",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Heading",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                },
+                {
+                    "idShort": "Throttle",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                },
+                {
+                    "idShort": "Altitude",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "ClimbRate",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
                 }
             ]
         }

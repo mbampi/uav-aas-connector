@@ -1,20 +1,106 @@
+# config/mappings/mavlink.yaml
+#
+# This file maps incoming MAVLink message fields to their
+# target properties in the AAS (Asset Administration Shell).
+# The 'sourceMessage' must match the MAVLink message name (e.g., "GLOBAL_POSITION_INT").
+# The 'sourceField' must match the Go struct field name (e.g., "Lat", "Alt").
+# The 'targetAASSubmodel' and 'targetAASProperty' must match the idShorts in quadcopter.json.
+# The 'scale' is a multiplier to convert raw MAVLink values (often integers) to standard units.
+
 mappings:
-  # Map the "Lat" field from the "GPS_RAW_INT" message
-  - sourceMessage: "GPS_RAW_INT"
+  # 1. HEARTBEAT (common.MessageHeartbeat)
+  - sourceMessage: "HEARTBEAT"
+    sourceField: "Type"
+    targetAASSubmodel: "Status"
+    targetAASProperty: "VehicleType"
+  - sourceMessage: "HEARTBEAT"
+    sourceField: "Autopilot"
+    targetAASSubmodel: "Status"
+    targetAASProperty: "AutopilotType"
+  - sourceMessage: "HEARTBEAT"
+    sourceField: "SystemStatus"
+    targetAASSubmodel: "Status"
+    targetAASProperty: "SystemStatus"
+
+  # 2. SYS_STATUS (common.MessageSysStatus)
+  - sourceMessage: "SYS_STATUS"
+    sourceField: "VoltageBattery"
+    targetAASSubmodel: "Power"
+    targetAASProperty: "Voltage"
+    scale: "0.001" # MAVLink unit is mV, scale to V
+  - sourceMessage: "SYS_STATUS"
+    sourceField: "CurrentBattery"
+    targetAASSubmodel: "Power"
+    targetAASProperty: "Current"
+    scale: "0.01" # MAVLink unit is cA, scale to A
+  - sourceMessage: "SYS_STATUS"
+    sourceField: "BatteryRemaining"
+    targetAASSubmodel: "Power"
+    targetAASProperty: "Remaining"
+
+  # 3. GLOBAL_POSITION_INT (common.MessageGlobalPositionInt)
+  - sourceMessage: "GLOBAL_POSITION_INT"
     sourceField: "Lat"
     targetAASSubmodel: "Navigation"
     targetAASProperty: "Latitude"
-    scale: "0.0000001"
-
-  # Map the "Lon" field from the same message
-  - sourceMessage: "GPS_RAW_INT"
+    scale: "1e-7" # MAVLink unit is 1e7 degrees
+  - sourceMessage: "GLOBAL_POSITION_INT"
     sourceField: "Lon"
     targetAASSubmodel: "Navigation"
     targetAASProperty: "Longitude"
-    scale: "0.0000001"
+    scale: "1e-7" # MAVLink unit is 1e7 degrees
+  - sourceMessage: "GLOBAL_POSITION_INT"
+    sourceField: "Alt"
+    targetAASSubmodel: "Navigation"
+    targetAASProperty: "AltitudeMSL"
+    scale: "0.001" # MAVLink unit is mm, scale to m
+  - sourceMessage: "GLOBAL_POSITION_INT"
+    sourceField: "RelativeAlt"
+    targetAASSubmodel: "Navigation"
+    targetAASProperty: "AltitudeRelative"
+    scale: "0.001" # MAVLink unit is mm, scale to m
+  - sourceMessage: "GLOBAL_POSITION_INT"
+    sourceField: "Hdg"
+    targetAASSubmodel: "Navigation"
+    targetAASProperty: "Heading"
+    scale: "0.01" # MAVLink unit is cdeg (100*deg)
 
-  # Map the "SystemStatus" field from the "HEARTBEAT" message
-  - sourceMessage: "HEARTBEAT"
-    sourceField: "SystemStatus"
-    targetAASSubmodel: "Identification"
-    targetAASProperty: "SystemStatus"
+  # 4. ATTITUDE (common.MessageAttitude)
+  - sourceMessage: "ATTITUDE"
+    sourceField: "Roll"
+    targetAASSubmodel: "Attitude"
+    targetAASProperty: "Roll"
+  - sourceMessage: "ATTITUDE"
+    sourceField: "Pitch"
+    targetAASSubmodel: "Attitude"
+    targetAASProperty: "Pitch"
+  - sourceMessage: "ATTITUDE"
+    sourceField: "Yaw"
+    targetAASSubmodel: "Attitude"
+    targetAASProperty: "Yaw"
+
+  # 5. VFR_HUD (common.MessageVfrHud)
+  - sourceMessage: "VFR_HUD"
+    sourceField: "Airspeed"
+    targetAASSubmodel: "HUD"
+    targetAASProperty: "Airspeed"
+  - sourceMessage: "VFR_HUD"
+    sourceField: "Groundspeed"
+    targetAASSubmodel: "HUD"
+    targetAASProperty: "Groundspeed"
+  - sourceMessage: "VFR_HUD"
+    sourceField: "Heading"
+    targetAASSubmodel: "HUD"
+    targetAASProperty: "Heading"
+  - sourceMessage: "VFR_HUD"
+    sourceField: "Throttle"
+    targetAASSubmodel: "HUD"
+    targetAASProperty: "Throttle"
+  - sourceMessage: "VFR_HUD"
+    sourceField: "Alt"
+    targetAASSubmodel: "HUD"
+    targetAASProperty: "Altitude"
+  - sourceMessage: "VFR_HUD"
+    sourceField: "Climb"
+    targetAASSubmodel: "HUD"
+    targetAASProperty: "ClimbRate"

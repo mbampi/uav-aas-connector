@@ -30,7 +30,7 @@ type AdapterConfig struct {
 // ExporterConfig represents the configuration for an output exporter.
 type ExporterConfig struct {
 	Type    string `yaml:"type,omitempty"` // e.g., "opcua", "http"
-	Enabled string `yaml:"enabled"`
+	Enabled bool   `yaml:"enabled"`
 	Port    int    `yaml:"port"`
 }
 
@@ -59,6 +59,11 @@ func LoadConfig(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.NewDecoder(file).Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to decode config file: %w", err)
+	}
+
+	for key, ec := range cfg.OutputExporters {
+		ec.Type = key
+		cfg.OutputExporters[key] = ec
 	}
 
 	return &cfg, nil

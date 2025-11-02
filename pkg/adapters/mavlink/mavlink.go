@@ -194,6 +194,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 		// 4. Send the event to the core
 		select {
 		case a.outChan <- updateEvent:
+			log.Printf("Sent AASUpdateEvent: %+v", updateEvent)
 		default:
 			log.Printf("Warning: AASUpdateEvent channel full. Discarding update for: %s", updateEvent.PropertyID)
 		}
