@@ -1,7 +1,7 @@
 # config.yaml
 
 aas:
-  filePath: "assets/aas/quadcopter.json"
+  filePath: "config/aas/quadcopter.json"
 
 adapter:
   type: "mavlink"
