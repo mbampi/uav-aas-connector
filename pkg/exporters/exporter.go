@@ -2,6 +2,7 @@ package exporters
 
 import (
 	"context"
+	"fmt"
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
 )
@@ -21,9 +22,14 @@ type OutputExporter interface {
 
 // NewOutputExporter creates a new OutputExporter based on the provided configuration.
 func NewOutputExporter(cfg config.ExporterConfig) (OutputExporter, error) {
-	// Implementation to create and return the appropriate OutputExporter
-	// based on the provided configuration.
-	// This is a placeholder; actual implementation would inspect cfg
-	// and instantiate the correct exporter type.
+	switch cfg.Type {
+	case "opcua":
+		// return opcua.NewExporter(cfg)
+	case "http":
+		// return http.NewExporter(cfg)
+	default:
+		return nil, fmt.Errorf("unknown exporter type: %s", cfg.Type)
+	}
+
 	return nil, nil
 }

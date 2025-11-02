@@ -4,7 +4,7 @@ aas:
   file_path: "assets/aas/quadcopter.json"
 
 adapter:
-  name: "mavlink"
+  type: "mavlink"
   connection: "udp"
   address: "localhost:14550"
   config_file: "config/mappings/mavlink.yaml"

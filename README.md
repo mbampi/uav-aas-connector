@@ -11,8 +11,7 @@
 ### Input Adapters
 
 - Collects data from UAVs (Unmanned Aerial Vehicles) through various protocols (e.g., MavLink, HTTP, MQTT).
-- Connect to a data source (MAVLink), translate it into a RawDataPoint, and send it to a rawChan.
-- They know nothing about AAS. They just normalize raw protocol data.
+- Connect to a data source (MAVLink), translate it into AAS format, based on mapping files.
 
 ### Processing Core
 

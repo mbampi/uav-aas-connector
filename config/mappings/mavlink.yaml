@@ -1,0 +1,22 @@
+
+mapping:
+  entries:
+    # Map the "Lat" field from the "GPS_RAW_INT" message
+    - sourceMessageName: "GPS_RAW_INT"
+      sourceMessageField: "Lat"
+      targetAASSubmodel: "Navigation"
+      targetAASProperty: "Latitude"
+      scale: "0.0000001"
+
+    # Map the "Lon" field from the same message
+    - sourceMessageName: "GPS_RAW_INT"
+      sourceMessageField: "Lon"
+      targetAASSubmodel: "Navigation"
+      targetAASProperty: "Longitude"
+      scale: "0.0000001"
+
+    # Map the "SystemStatus" field from the "HEARTBEAT" message
+    - sourceMessageName: "HEARTBEAT"
+      sourceMessageField: "SystemStatus"
+      targetAASSubmodel: "Identification"
+      targetAASProperty: "SystemStatus"

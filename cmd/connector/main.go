@@ -1,8 +1,3 @@
-// 1. Load config (using pkg/config).
-// 2. Create channels (rawChan, processedChan).
-// 3. Start Adapters, Core and Exporters as goroutines.
-// 4. Handle graceful shutdown on interrupt signal.
-
 package main
 
 import (
@@ -18,19 +13,22 @@ import (
 	"uav-aas-connector/pkg/exporters"
 )
 
+// 1. Load config (using pkg/config).
+// 2. Create channels (rawChan, processedChan).
+// 3. Start Adapters, Core and Exporters as goroutines.
+// 4. Handle graceful shutdown on interrupt signal.
+
 func main() {
-	// Load configuration
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Create context for goroutines
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Start Input Adapter
-	rawChan := make(chan *core.RawDataPoint, 100)
+	rawChan := make(chan *core.AASUpdateEvent, 100)
 	adapter, err := adapters.NewInputAdapter(cfg.InputAdapter)
 	if err != nil {
 		log.Fatalf("Failed to create adapter: %v", err)
@@ -42,7 +40,11 @@ func main() {
 	}(adapter)
 
 	// Start AAS Core
-	coreInstance := core.NewAASCore(&cfg.Mapping)
+	// UPDATED: Handle the error returned from NewAASCore
+	coreInstance, err := core.NewAASCore(cfg.AAS)
+	if err != nil {
+		log.Fatalf("Failed to create AAS core: %v", err)
+	}
 	go coreInstance.Start(ctx, rawChan)
 
 	// Start Output Exporters
