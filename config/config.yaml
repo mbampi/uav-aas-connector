@@ -1,22 +1,22 @@
 # config.yaml
 
 aas:
-  file_path: "assets/aas/quadcopter.json"
+  filePath: "assets/aas/quadcopter.json"
 
 adapter:
   type: "mavlink"
   connection: "udp"
-  address: "localhost:14550"
-  config_file: "config/mappings/mavlink.yaml"
+  address: "127.0.0.1:14550"
+  mappingFile: "config/mappings/mavlink.yaml"
 
 exporters:
-  http:
-    enabled: true
-    port: 8080
+#   http:
+#     enabled: true
+#     port: 8080
     
-  opcua:
-    enabled: true
-    port: 4840
+#   opcua:
+#     enabled: true
+#     port: 4840
   
 advanced:
   log_level: "debug"

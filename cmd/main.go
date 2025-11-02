@@ -19,7 +19,7 @@ import (
 // 4. Handle graceful shutdown on interrupt signal.
 
 func main() {
-	cfg, err := config.LoadConfig("config.yaml")
+	cfg, err := config.LoadConfig("config/config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -40,7 +40,6 @@ func main() {
 	}(adapter)
 
 	// Start AAS Core
-	// UPDATED: Handle the error returned from NewAASCore
 	coreInstance, err := core.NewAASCore(cfg.AAS)
 	if err != nil {
 		log.Fatalf("Failed to create AAS core: %v", err)

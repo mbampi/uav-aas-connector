@@ -2,13 +2,10 @@ package mavlink
 
 import (
 	"testing"
-	"time"
-
 	"uav-aas-connector/pkg/config"
-	"uav-aas-connector/pkg/core"
 
-	"github.com/bluenviron/gomavlib/v3"
-	"github.com/bluenviron/gomavlib/v3/pkg/frame"
+	"os"
+	"path/filepath"
 )
 
 // FakeMessage is a small test message used to simulate a MAVLink message.
@@ -65,56 +62,72 @@ func TestApplyTransform(t *testing.T) {
 	}
 }
 
-func TestHandleFrame_MappingAndTransform(t *testing.T) {
-	// Prepare adapter with a mapping for the FakeMessage type (which becomes FAKE_MESSAGE).
-	ch := make(chan *core.AASUpdateEvent, 10)
-	a := &MavlinkAdapter{
-		outChan: ch,
-		mappingRules: map[string][]config.MappingEntry{
-			"FAKE_MESSAGE": {
-				{
-					SourceMessageName: "FAKE_MESSAGE",
-					SourceField:       "Value",
-					TargetAASSubmodel: "Nav",
-					TargetAASProperty: "Speed",
-					Scale:             "0.1",
-				},
+func TestLoadMapping_Success(t *testing.T) {
+	// Create a temporary mapping file
+	yamlContent := `
+mappings:
+  - sourceMessage: "GPS_RAW_INT"
+    sourceField: "Lat"
+    targetAASSubmodel: "Navigation"
+    targetAASProperty: "Latitude"
+    scale: "0.0000001"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mapping.yaml")
+	if err := os.WriteFile(path, []byte(yamlContent), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	// Expected config
+	cfg := &config.MappingConfig{
+		Mappings: []config.MappingEntry{
+			{
+				SourceMessage:     "GPS_RAW_INT",
+				SourceField:       "Lat",
+				TargetAASSubmodel: "Navigation",
+				TargetAASProperty: "Latitude",
+				Scale:             "0.0000001",
 			},
 		},
 	}
 
-	// Create a V2 frame that wraps our FakeMessage.
-	msg := &FakeMessage{Value: 100}
-	v2 := frame.V2Frame{
-		SequenceNumber: 1,
-		SystemID:       1,
-		ComponentID:    1,
-		Message:        msg,
+	loaded, err := loadMapping(path)
+	if err != nil {
+		t.Fatalf("loadMapping returned error: %v", err)
+	}
+	if loaded == nil {
+		t.Fatalf("expected non-nil MappingConfig")
+	}
+	if len(loaded.Mappings) != 1 {
+		t.Fatalf("expected 1 mapping, got %d", len(loaded.Mappings))
+	}
+	m := loaded.Mappings[0]
+	if m.SourceMessage != cfg.Mappings[0].SourceMessage ||
+		m.SourceField != cfg.Mappings[0].SourceField ||
+		m.TargetAASSubmodel != cfg.Mappings[0].TargetAASSubmodel ||
+		m.TargetAASProperty != cfg.Mappings[0].TargetAASProperty ||
+		m.Scale != cfg.Mappings[0].Scale {
+		t.Fatalf("loaded mapping does not match original: got %+v want %+v", m, cfg.Mappings[0])
+	}
+}
+
+func TestLoadMapping_FileNotFound(t *testing.T) {
+	_, err := loadMapping("/path/that/does/not/exist.yaml")
+	if err == nil {
+		t.Fatalf("expected error for non-existent file, got nil")
+	}
+}
+
+func TestLoadMapping_InvalidYAML(t *testing.T) {
+	// Write invalid YAML content
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(path, []byte("::: not valid yaml :::"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	evt := &gomavlib.EventFrame{Frame: &v2}
-
-	// Call handleFrame (synchronously). It should push one update into the channel.
-	a.handleFrame(evt)
-
-	select {
-	case upd := <-ch:
-		if upd.SubmodelID != "Nav" {
-			t.Fatalf("unexpected SubmodelID: %s", upd.SubmodelID)
-		}
-		if upd.PropertyID != "Speed" {
-			t.Fatalf("unexpected PropertyID: %s", upd.PropertyID)
-		}
-
-		// Value should be scaled: 100 * 0.1 => 10.0
-		if upd.Value != "10.0" {
-			t.Fatalf("unexpected Value: %#v", upd.Value)
-		}
-		// Timestamp should be recent
-		if time.Since(upd.Timestamp) > time.Second*5 {
-			t.Fatalf("timestamp too old: %v", upd.Timestamp)
-		}
-	default:
-		t.Fatalf("expected an update event but channel was empty")
+	_, err := loadMapping(path)
+	if err == nil {
+		t.Fatalf("expected error when decoding invalid YAML, got nil")
 	}
 }

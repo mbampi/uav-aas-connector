@@ -39,23 +39,25 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load mavlink mapping file '%s': %w", cfg.MappingFile, err)
 	}
+	log.Printf("Mavlink adapter loaded mapping: %+v ", mappingCfg)
 
 	// 2. Create the mapping rules lookup map for efficient processing.
 	rules := make(map[string][]config.MappingEntry)
-	for _, entry := range mappingCfg.Entries {
+	for _, entry := range mappingCfg.Mappings {
 		// Normalize message name to canonical MAVLink uppercase (e.g., GPS_RAW_INT)
-		canonicalName := strings.ToUpper(entry.SourceMessageName)
+		canonicalName := strings.ToUpper(entry.SourceMessage)
 		rules[canonicalName] = append(rules[canonicalName], entry)
 	}
-	log.Printf("Mavlink adapter loaded %d mapping rules for %d message types", len(mappingCfg.Entries), len(rules))
+	log.Printf("Mavlink adapter loaded %d mapping rules for %d message types", len(mappingCfg.Mappings), len(rules))
+	log.Printf("Mavlink adapter mapping rules: %+v", rules)
 
 	// 3. Configure the gomavlib endpoint based on config
 	var endpoint gomavlib.EndpointConf
 	switch cfg.Connection {
 	case "udp":
-		endpoint = gomavlib.EndpointUDPClient{Address: cfg.Address}
+		endpoint = gomavlib.EndpointUDPServer{Address: cfg.Address}
 	case "tcp":
-		endpoint = gomavlib.EndpointTCPClient{Address: cfg.Address}
+		endpoint = gomavlib.EndpointTCPServer{Address: cfg.Address}
 	case "serial":
 		endpoint = gomavlib.EndpointSerial{Device: cfg.Address, Baud: 57600}
 	default:
@@ -66,11 +68,12 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 	node := &gomavlib.Node{
 		Endpoints:           []gomavlib.EndpointConf{endpoint},
 		Dialect:             common.Dialect,
-		HeartbeatDisable:    true, // This adapter only listens
+		HeartbeatDisable:    true,
 		StreamRequestEnable: true, // Automatically request streams from the UAV
+		OutVersion:          2,
+		OutSystemID:         1,
 	}
 
-	// Initialize the node
 	err = node.Initialize()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize gomavlib node: %w", err)
@@ -84,7 +87,6 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 }
 
 // loadMapping loads the mapping configuration file.
-// Note: This now loads the config.MappingConfig struct, not the old mavlinkMappingConfig.
 func loadMapping(path string) (*config.MappingConfig, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -96,6 +98,7 @@ func loadMapping(path string) (*config.MappingConfig, error) {
 	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to decode yaml: %w", err)
 	}
+
 	return &cfg, nil
 }
 
@@ -116,13 +119,16 @@ func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpda
 			switch e := evt.(type) {
 			case *gomavlib.EventFrame:
 				// A MAVLink message frame was received
+				log.Printf("Received MAVLink message: %T", e.Frame.GetMessage())
 				a.handleFrame(e)
 
 			case *gomavlib.EventChannelOpen:
-				log.Printf("Mavlink channel open: %s", e.Channel.Endpoint())
+				log.Printf("Mavlink channel open")
 
 			case *gomavlib.EventChannelClose:
-				log.Printf("Mavlink channel closed: %s", e.Channel.Endpoint())
+				log.Printf("Mavlink channel closed")
+			default:
+				log.Printf("Mavlink adapter received unhandled event: %T", e)
 			}
 		}
 	}
@@ -152,8 +158,10 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 	// Check if we have any mapping rules for this message type
 	rules, ok := a.mappingRules[canonical]
 	if !ok {
+		log.Printf("Message ignored: %s", canonical)
 		return // We don't care about this message, ignore it
 	}
+	log.Printf("Processing message: %s", canonical)
 
 	ts := time.Now().UTC()
 

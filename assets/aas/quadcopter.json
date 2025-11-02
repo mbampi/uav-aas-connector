@@ -1,0 +1,151 @@
+{
+    "assetAdministrationShells": [
+        {
+            "id": "urn:aas:quadcopter:001",
+            "idShort": "QuadcopterUAV",
+            "modelType": "AssetAdministrationShell",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Asset Administration Shell for Quadcopter UAV"
+                }
+            ],
+            "administration": {
+                "version": "1.0",
+                "revision": "0"
+            },
+            "assetInformation": {
+                "assetKind": "Instance",
+                "globalAssetId": "urn:asset:quadcopter:001"
+            },
+            "submodels": [
+                {
+                    "type": "ModelReference",
+                    "keys": [
+                        {
+                            "type": "Submodel",
+                            "value": "urn:submodel:identification:001"
+                        }
+                    ]
+                },
+                {
+                    "type": "ModelReference",
+                    "keys": [
+                        {
+                            "type": "Submodel",
+                            "value": "urn:submodel:status:001"
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "submodels": [
+        {
+            "id": "urn:submodel:identification:001",
+            "idShort": "Identification",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Asset identification and basic information"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Manufacturer",
+                    "category": "PARAMETER",
+                    "modelType": "Property",
+                    "valueType": "xs:string",
+                    "value": "Generic Drone Company"
+                },
+                {
+                    "idShort": "ProductName",
+                    "category": "PARAMETER",
+                    "modelType": "Property",
+                    "valueType": "xs:string",
+                    "value": "Quadcopter Model X1"
+                },
+                {
+                    "idShort": "SerialNumber",
+                    "category": "PARAMETER",
+                    "modelType": "Property",
+                    "valueType": "xs:string",
+                    "value": "QC001-2024-001"
+                },
+                {
+                    "idShort": "ManufacturingYear",
+                    "category": "PARAMETER",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "2024"
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:status:001",
+            "idShort": "Status",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Current status and operational state"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "VehicleType",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "2",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "MAVLink vehicle type (2 = Quadrotor)"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "AutopilotType",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "MAVLink autopilot type (0 = Generic)"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "SystemStatus",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "4",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "System status (4 = Active)"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "SystemTime",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "System time in Unix seconds"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

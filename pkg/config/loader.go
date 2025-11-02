@@ -9,42 +9,43 @@ import (
 
 // Config represents the overall configuration structure for the UAV AAS Connector.
 type Config struct {
-	InputAdapter    AdapterConfig
-	OutputExporters []ExporterConfig
-	AAS             AASConfig
+	InputAdapter    AdapterConfig             `yaml:"adapter"`
+	OutputExporters map[string]ExporterConfig `yaml:"exporters"`
+	AAS             AASConfig                 `yaml:"aas"`
 }
 
 // AASConfig represents the configuration specific to the Asset Administration Shell.
 type AASConfig struct {
-	FilePath string // Path to the AAS model file (JSON)
+	FilePath string `yaml:"filePath"` // Path to the AAS model file (JSON)
 }
 
 // AdapterConfig represents the configuration for an input adapter.
 type AdapterConfig struct {
-	Type        string // e.g., "mavlink"
-	Connection  string
-	Address     string // can be IP:port for UDP/TCP or device path for serial
-	MappingFile string
+	Type        string `yaml:"type"` // e.g., "mavlink"
+	Connection  string `yaml:"connection"`
+	Address     string `yaml:"address"` // can be IP:port for UDP/TCP or device path for serial
+	MappingFile string `yaml:"mappingFile"`
 }
 
 // ExporterConfig represents the configuration for an output exporter.
 type ExporterConfig struct {
-	Type string // e.g., "opcua", "http"
-	Port int
+	Type    string `yaml:"type,omitempty"` // e.g., "opcua", "http"
+	Enabled string `yaml:"enabled"`
+	Port    int    `yaml:"port"`
 }
 
 // MappingConfig represents the mapping from data source fields to AAS properties.
 type MappingConfig struct {
-	Entries []MappingEntry `json:"entries"`
+	Mappings []MappingEntry `yaml:"mappings"`
 }
 
 // MappingEntry represents a single mapping from a data source to an AAS property.
 type MappingEntry struct {
-	SourceMessageName string `json:"sourceMessageName"` // e.g., "GPS_RAW_INT"
-	SourceField       string `json:"sourceField"`       // e.g., "Lat"
-	TargetAASSubmodel string `json:"targetAASSubmodel"` // idShort e.g., "Navigation"
-	TargetAASProperty string `json:"targetAASProperty"` // idShort e.g., "Latitude"
-	Scale             string `json:"scale,omitempty"`   // e.g., "0.0000001"
+	SourceMessage     string `yaml:"sourceMessage"`     // e.g., "GPS_RAW_INT"
+	SourceField       string `yaml:"sourceField"`       // e.g., "Lat"
+	TargetAASSubmodel string `yaml:"targetAASSubmodel"` // idShort e.g., "Navigation"
+	TargetAASProperty string `yaml:"targetAASProperty"` // idShort e.g., "Latitude"
+	Scale             string `yaml:"scale,omitempty"`   // e.g., "0.0000001"
 }
 
 // LoadConfig loads the configuration from the specified YAML file.
