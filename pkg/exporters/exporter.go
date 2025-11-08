@@ -6,6 +6,7 @@ import (
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
 	"uav-aas-connector/pkg/exporters/dummy"
+	"uav-aas-connector/pkg/exporters/http"
 )
 
 // OutputExporter is the interface for all "Load" components.
@@ -22,16 +23,16 @@ type OutputExporter interface {
 }
 
 // NewOutputExporter creates a new OutputExporter based on the provided configuration.
-func NewOutputExporter(cfg config.ExporterConfig) (OutputExporter, error) {
+func NewOutputExporter(cfg config.ExporterConfig, core *core.AASCore) (OutputExporter, error) {
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("exporter is disabled: %s", cfg.Type)
 	}
 
 	switch cfg.Type {
 	case "opcua":
-		// return opcua.NewExporter(cfg)
+		// return opcua.NewExporter(cfg, core)
 	case "http":
-		// return http.NewExporter(cfg)
+		return http.NewExporter(cfg, core)
 	case "dummy":
 		return dummy.NewDummyExporter(cfg), nil
 	default:

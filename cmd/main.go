@@ -39,7 +39,6 @@ func main() {
 		}
 	}(adapter)
 
-	// Start AAS Core
 	coreInstance, err := core.NewAASCore(cfg.AAS)
 	if err != nil {
 		log.Fatalf("Failed to create AAS core: %v", err)
@@ -48,7 +47,7 @@ func main() {
 
 	// Start Output Exporters
 	for _, exporterCfg := range cfg.OutputExporters {
-		exporter, err := exporters.NewOutputExporter(exporterCfg)
+		exporter, err := exporters.NewOutputExporter(exporterCfg, coreInstance)
 		if err != nil {
 			log.Printf("Failed to create exporter: %v", err)
 			continue
