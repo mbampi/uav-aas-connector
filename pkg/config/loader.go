@@ -32,6 +32,7 @@ type ExporterConfig struct {
 	Type    string `yaml:"type,omitempty"` // e.g., "opcua", "http"
 	Enabled bool   `yaml:"enabled"`
 	Port    int    `yaml:"port"`
+	Host    string `yaml:"host,omitempty"`
 }
 
 // MappingConfig represents the mapping from data source fields to AAS properties.

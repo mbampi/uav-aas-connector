@@ -16,6 +16,7 @@ require (
 require (
 	github.com/aas-core-works/aas-core3.0-golang v1.0.6
 	github.com/creack/goselect v0.1.2 // indirect
+	github.com/gopcua/opcua v0.8.0
 	github.com/pion/logging v0.2.2 // indirect
 	github.com/pion/transport/v2 v2.2.10 // indirect
 	go.bug.st/serial v1.6.4 // indirect

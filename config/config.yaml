@@ -6,7 +6,7 @@ aas:
 adapter:
   type: "mavlink"
   connection: "udp"
-  address: "127.0.0.1:14550"
+  address: "0.0.0.0:14550"
   mappingFile: "config/mappings/mavlink.yaml"
 
 exporters:
@@ -16,10 +16,12 @@ exporters:
   http:
     enabled: false
     port: 8080
+    host: "localhost
     
   opcua:
     enabled: false
     port: 4840
+    host: "localhost"
   
 advanced:
   log_level: "debug"
