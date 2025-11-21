@@ -11,6 +11,7 @@ import (
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
 	"uav-aas-connector/pkg/exporters"
+	"uav-aas-connector/pkg/instrumentation" // Import the new package
 )
 
 // 1. Load config (using pkg/config).
@@ -19,6 +20,12 @@ import (
 // 4. Handle graceful shutdown on interrupt signal.
 
 func main() {
+	// Initialize Latency Logger
+	if err := instrumentation.Init("latency.log"); err != nil {
+		log.Fatalf("Failed to init instrumentation: %v", err)
+	}
+	defer instrumentation.Close()
+
 	cfg, err := config.LoadConfig("config/config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)

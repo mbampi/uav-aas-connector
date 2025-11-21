@@ -8,6 +8,7 @@ import (
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
+	"uav-aas-connector/pkg/instrumentation"
 
 	aastypes "github.com/aas-core-works/aas-core3.0-golang/types"
 	"github.com/gopcua/opcua"
@@ -80,7 +81,6 @@ func (e *Exporter) Stop() error {
 
 func (e *Exporter) writeDynamic(ctx context.Context, event *core.AASUpdateEvent) error {
 	// 1. Query the AAS Model for the definition of this property
-	// This makes it fully dynamic based on the JSON file.
 	dataType, err := e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
 	if err != nil {
 		return fmt.Errorf("unknown property in AAS: %w", err)
@@ -111,6 +111,11 @@ func (e *Exporter) writeDynamic(ctx context.Context, event *core.AASUpdateEvent)
 	}
 
 	resp, err := e.client.Write(ctx, req)
+
+	// T2: Record egress time
+	// We use event.Timestamp (T0) as the TraceID
+	instrumentation.Record("EXPORTER", event.PropertyID, event.Timestamp)
+
 	if err != nil {
 		return err
 	}

@@ -18,6 +18,7 @@ import (
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
+	"uav-aas-connector/pkg/instrumentation"
 )
 
 // MavlinkAdapter implements the adapters.InputAdapter interface for MAVLink.
@@ -163,7 +164,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 	}
 	log.Printf("Processing message: %s", canonical)
 
-	ts := time.Now().UTC()
+	ts := time.Now().UTC() // T0 and our TraceID
 
 	// This message is mapped. Iterate through all rules defined for it.
 	for _, entry := range rules {
@@ -190,6 +191,9 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 			Value:      strValue,
 			Timestamp:  ts,
 		}
+
+		// T0: Record the ingress
+		instrumentation.Record("ADAPTER", updateEvent.PropertyID, updateEvent.Timestamp)
 
 		// 4. Send the event to the core
 		select {

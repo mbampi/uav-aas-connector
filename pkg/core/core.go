@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 	"uav-aas-connector/pkg/config"
+	"uav-aas-connector/pkg/instrumentation"
 
 	"github.com/aas-core-works/aas-core3.0-golang/jsonization"
 	aastypes "github.com/aas-core-works/aas-core3.0-golang/types"
@@ -162,6 +163,9 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 // updateModel updates the model with new data and notifies subscribers.
 func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value string, timestamp time.Time) {
 	c.modelMutex.Lock()
+	// T1: Record core processing time
+	// We use the incoming 'timestamp' (T0) as the TraceID
+	instrumentation.Record("CORE", propertyIdPath, timestamp)
 	defer c.modelMutex.Unlock()
 
 	sm := findSubmodel(c.env, submodelIdShort)
