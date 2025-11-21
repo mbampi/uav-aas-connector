@@ -182,13 +182,11 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 			continue
 		}
 
-		strValue := fmt.Sprintf("%v", newValue)
-
 		// 3. Create the specific AASUpdateEvent
 		updateEvent := &core.AASUpdateEvent{
 			SubmodelID: entry.TargetAASSubmodel,
 			PropertyID: entry.TargetAASProperty,
-			Value:      strValue,
+			Value:      newValue,
 			Timestamp:  ts,
 		}
 

@@ -25,10 +25,11 @@ type AASCore struct {
 }
 
 // AASUpdateEvent is the "push" notification from the core.
+// Optimization: Value is 'any' to allow zero-copy passing of floats/ints to exporters.
 type AASUpdateEvent struct {
 	SubmodelID string // e.g., "Navigation" (idShort)
 	PropertyID string // e.g., "Position.Latitude" (idShort path)
-	Value      string
+	Value      any    // Changed from string to any
 	Timestamp  time.Time
 }
 
@@ -66,8 +67,6 @@ func (c *AASCore) GetAllSubmodels() []aastypes.ISubmodel {
 	c.modelMutex.RLock()
 	defer c.modelMutex.RUnlock()
 
-	// Return a copy to be safe, or the raw slice if you trust the caller not to modify it.
-	// Since the slice contains pointers to interfaces, shallow copy of the slice is usually enough for read operations.
 	if c.env.Submodels() == nil {
 		return []aastypes.ISubmodel{}
 	}
@@ -97,7 +96,6 @@ func (c *AASCore) GetSubmodelByID(id string) (aastypes.ISubmodel, error) {
 }
 
 // GetElementDataType looks up the data type defined in the AAS JSON for a specific path.
-// This enables the exporters to be fully dynamic.
 func (c *AASCore) GetElementDataType(submodelIdShort, propertyIdPath string) (aastypes.DataTypeDefXSD, error) {
 	c.modelMutex.RLock()
 	defer c.modelMutex.RUnlock()
@@ -161,7 +159,7 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 }
 
 // updateModel updates the model with new data and notifies subscribers.
-func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value string, timestamp time.Time) {
+func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any, timestamp time.Time) {
 	c.modelMutex.Lock()
 	// T1: Record core processing time
 	// We use the incoming 'timestamp' (T0) as the TraceID
@@ -179,10 +177,14 @@ func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value stri
 		return // Property not found in model
 	}
 
+	// Update the in-memory AAS Model.
+	// The library strictly requires a *string, so we must format it here.
 	if p, ok := prop.(*aastypes.Property); ok {
-		p.SetValue(&value)
+		strValue := fmt.Sprintf("%v", value)
+		p.SetValue(&strValue)
 	}
 
+	// Broadcast the event to Exporters.
 	updateEvent := &AASUpdateEvent{
 		SubmodelID: submodelIdShort,
 		PropertyID: propertyIdPath,

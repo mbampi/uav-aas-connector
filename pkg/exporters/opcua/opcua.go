@@ -127,24 +127,47 @@ func (e *Exporter) writeDynamic(ctx context.Context, event *core.AASUpdateEvent)
 }
 
 // convertToVariant maps AAS XSD Types -> Go Types -> OPC UA Variants
-func (e *Exporter) convertToVariant(val string, aasType aastypes.DataTypeDefXSD) (*ua.Variant, error) {
+// Optimized: accepts 'any' to allow direct float64 handling
+func (e *Exporter) convertToVariant(val any, aasType aastypes.DataTypeDefXSD) (*ua.Variant, error) {
+
+	// If val is already a float64 (from MAVLink adapter), use it directly.
+	if f, ok := val.(float64); ok {
+		switch aasType {
+		case aastypes.DataTypeDefXSDDouble:
+			return ua.MustVariant(f), nil
+		case aastypes.DataTypeDefXSDFloat:
+			return ua.MustVariant(float32(f)), nil
+		case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger,
+			aastypes.DataTypeDefXSDPositiveInteger, aastypes.DataTypeDefXSDNonNegativeInteger:
+			return ua.MustVariant(int32(f)), nil
+		case aastypes.DataTypeDefXSDBoolean:
+			return ua.MustVariant(f != 0), nil
+		default:
+			// For other types (e.g. string), fall through to the string conversion below
+		}
+	}
+
+	// Fallback: Convert to string and parse.
+	// This handles types not handled in the fast path.
+	valStr := fmt.Sprintf("%v", val)
+
 	switch aasType {
 	case aastypes.DataTypeDefXSDBoolean:
-		v, err := strconv.ParseBool(val)
+		v, err := strconv.ParseBool(valStr)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(v), nil
 
 	case aastypes.DataTypeDefXSDFloat:
-		v, err := strconv.ParseFloat(val, 32)
+		v, err := strconv.ParseFloat(valStr, 32)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(float32(v)), nil
 
 	case aastypes.DataTypeDefXSDDouble:
-		v, err := strconv.ParseFloat(val, 64)
+		v, err := strconv.ParseFloat(valStr, 64)
 		if err != nil {
 			return nil, err
 		}
@@ -152,27 +175,27 @@ func (e *Exporter) convertToVariant(val string, aasType aastypes.DataTypeDefXSD)
 
 	case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDPositiveInteger, aastypes.DataTypeDefXSDNonNegativeInteger:
 		// Try parsing as int first
-		if v, err := strconv.ParseInt(val, 10, 32); err == nil {
+		if v, err := strconv.ParseInt(valStr, 10, 32); err == nil {
 			return ua.MustVariant(int32(v)), nil
 		}
 		// Fallback: Parse as float and cast to int (handles "12.0")
-		if f, err := strconv.ParseFloat(val, 64); err == nil {
+		if f, err := strconv.ParseFloat(valStr, 64); err == nil {
 			return ua.MustVariant(int32(f)), nil
 		}
-		return nil, fmt.Errorf("cannot parse '%s' as int32", val)
+		return nil, fmt.Errorf("cannot parse '%s' as int32", valStr)
 
 	case aastypes.DataTypeDefXSDLong, aastypes.DataTypeDefXSDInteger:
-		v, err := strconv.ParseInt(val, 10, 64)
+		v, err := strconv.ParseInt(valStr, 10, 64)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(v), nil
 
 	case aastypes.DataTypeDefXSDString:
-		return ua.MustVariant(val), nil
+		return ua.MustVariant(valStr), nil
 
 	default:
 		// Fallback for complex types or unknowns
-		return ua.MustVariant(val), nil
+		return ua.MustVariant(valStr), nil
 	}
 }
