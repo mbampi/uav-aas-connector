@@ -6,12 +6,25 @@ import (
 	aastypes "github.com/aas-core-works/aas-core3.0-golang/types"
 )
 
+// Existing findSubmodel (by idShort)
 func findSubmodel(env aastypes.IEnvironment, idShort string) aastypes.ISubmodel {
 	if env.Submodels() == nil {
 		return nil
 	}
 	for _, sm := range env.Submodels() {
 		if sm.IDShort() != nil && *sm.IDShort() == idShort {
+			return sm
+		}
+	}
+	return nil
+}
+
+func findSubmodelByID(env aastypes.IEnvironment, id string) aastypes.ISubmodel {
+	if env.Submodels() == nil {
+		return nil
+	}
+	for _, sm := range env.Submodels() {
+		if sm.ID() == id {
 			return sm
 		}
 	}
@@ -48,14 +61,4 @@ func findProperty(elements []aastypes.ISubmodelElement, path []string) (aastypes
 	}
 
 	return nil, fmt.Errorf("element '%s' is not a Collection", currentIDShort)
-}
-
-func (c *AASCore) GetSubmodel(idShort string) (aastypes.ISubmodel, error) {
-	c.modelMutex.RLock()
-	defer c.modelMutex.RUnlock()
-	sm := findSubmodel(c.env, idShort)
-	if sm == nil {
-		return nil, fmt.Errorf("not found")
-	}
-	return sm, nil
 }

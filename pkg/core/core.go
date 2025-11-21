@@ -60,6 +60,41 @@ func NewAASCore(cfg config.AASConfig) (*AASCore, error) {
 	}, nil
 }
 
+// GetAllSubmodels retrieves all submodels in the environment
+func (c *AASCore) GetAllSubmodels() []aastypes.ISubmodel {
+	c.modelMutex.RLock()
+	defer c.modelMutex.RUnlock()
+
+	// Return a copy to be safe, or the raw slice if you trust the caller not to modify it.
+	// Since the slice contains pointers to interfaces, shallow copy of the slice is usually enough for read operations.
+	if c.env.Submodels() == nil {
+		return []aastypes.ISubmodel{}
+	}
+	return c.env.Submodels()
+}
+
+// GetSubmodel retrieves a submodel by its idShort
+func (c *AASCore) GetSubmodel(idShort string) (aastypes.ISubmodel, error) {
+	c.modelMutex.RLock()
+	defer c.modelMutex.RUnlock()
+	sm := findSubmodel(c.env, idShort)
+	if sm == nil {
+		return nil, fmt.Errorf("not found")
+	}
+	return sm, nil
+}
+
+// GetSubmodelByID retrieves a submodel by its global ID (e.g., urn:...)
+func (c *AASCore) GetSubmodelByID(id string) (aastypes.ISubmodel, error) {
+	c.modelMutex.RLock()
+	defer c.modelMutex.RUnlock()
+	sm := findSubmodelByID(c.env, id)
+	if sm == nil {
+		return nil, fmt.Errorf("submodel with id '%s' not found", id)
+	}
+	return sm, nil
+}
+
 // GetElementDataType looks up the data type defined in the AAS JSON for a specific path.
 // This enables the exporters to be fully dynamic.
 func (c *AASCore) GetElementDataType(submodelIdShort, propertyIdPath string) (aastypes.DataTypeDefXSD, error) {
@@ -80,6 +115,7 @@ func (c *AASCore) GetElementDataType(submodelIdShort, propertyIdPath string) (aa
 	return prop.ValueType(), nil
 }
 
+// Start begins processing incoming AAS update events.
 func (c *AASCore) Start(ctx context.Context, inChan <-chan *AASUpdateEvent) {
 	for {
 		select {
@@ -98,6 +134,7 @@ func (c *AASCore) Start(ctx context.Context, inChan <-chan *AASUpdateEvent) {
 	}
 }
 
+// Subscribe creates a new subscription channel for AAS update events.
 func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error) {
 	c.modelMutex.Lock()
 	defer c.modelMutex.Unlock()
@@ -122,6 +159,7 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 	return subChan, nil
 }
 
+// updateModel updates the model with new data and notifies subscribers.
 func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value string, timestamp time.Time) {
 	c.modelMutex.Lock()
 	defer c.modelMutex.Unlock()
