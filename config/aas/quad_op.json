@@ -1,0 +1,561 @@
+{
+    "submodels": [
+        {
+            "id": "urn:submodel:identification:001",
+            "idShort": "Identification",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Asset identification and Remote ID"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Manufacturer",
+                    "category": "PARAMETER",
+                    "modelType": "Property",
+                    "valueType": "xs:string",
+                    "value": "Generic Drone Company"
+                },
+                {
+                    "idShort": "ProductName",
+                    "category": "PARAMETER",
+                    "modelType": "Property",
+                    "valueType": "xs:string",
+                    "value": "Quadcopter Model X1"
+                },
+                {
+                    "idShort": "RemoteID_System",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from OPEN_DRONE_ID_SYSTEM"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "OperatorLocationType",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "UAType",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "ClassificationType",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:status:001",
+            "idShort": "Status",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Current status from HEARTBEAT"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "VehicleType",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                },
+                {
+                    "idShort": "AutopilotType",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                },
+                {
+                    "idShort": "SystemStatus",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:power:001",
+            "idShort": "Power",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "System status from SYS_STATUS"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Voltage",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Current",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Remaining",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "100"
+                },
+                {
+                    "idShort": "CPULoad",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                },
+                {
+                    "idShort": "DropRateComm",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:navigation:001",
+            "idShort": "Navigation",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Global and Local positioning data"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "GlobalPosition",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from GLOBAL_POSITION_INT"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "Latitude",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Longitude",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "AltitudeMSL",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Heading",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "LocalPositionNED",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from LOCAL_POSITION_NED"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "X",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Y",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Z",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "VX",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "VY",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "VZ",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "GPS_Raw",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from GPS_RAW_INT"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "FixType",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "SatellitesVisible",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "HDOP",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "TerrainData",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from ALTITUDE"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "TerrainAltitude",
+                            "modelType": "Property",
+                            "valueType": "xs:float",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "BottomClearance",
+                            "modelType": "Property",
+                            "valueType": "xs:float",
+                            "value": "0.0"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:attitude:001",
+            "idShort": "Attitude",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Vehicle orientation and rates"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "EulerAngles",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from ATTITUDE"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "Roll",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Pitch",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Yaw",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "RollSpeed",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "PitchSpeed",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "YawSpeed",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "Quaternion",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from ATTITUDE_QUATERNION"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "Q1",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Q2",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Q3",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Q4",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "AttitudeTarget",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from ATTITUDE_TARGET"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "BodyRollRate",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "BodyPitchRate",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "BodyYawRate",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Thrust",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:actuation:001",
+            "idShort": "Actuation",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Servo outputs and ESC status"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "ServoOutput",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from SERVO_OUTPUT_RAW"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "Servo1",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "Servo2",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "Servo3",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "Servo4",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        }
+                    ]
+                },
+                {
+                    "idShort": "ESC_Status",
+                    "modelType": "SubmodelElementCollection",
+                    "description": [
+                        {
+                            "language": "en",
+                            "text": "Mapped from ESC_STATUS"
+                        }
+                    ],
+                    "value": [
+                        {
+                            "idShort": "RPM",
+                            "modelType": "Property",
+                            "valueType": "xs:int",
+                            "value": "0"
+                        },
+                        {
+                            "idShort": "Voltage",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        },
+                        {
+                            "idShort": "Current",
+                            "modelType": "Property",
+                            "valueType": "xs:double",
+                            "value": "0.0"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "urn:submodel:hud:001",
+            "idShort": "HUD",
+            "modelType": "Submodel",
+            "description": [
+                {
+                    "language": "en",
+                    "text": "Heads-Up Display data from VFR_HUD"
+                }
+            ],
+            "submodelElements": [
+                {
+                    "idShort": "Airspeed",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Groundspeed",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "Heading",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                },
+                {
+                    "idShort": "Throttle",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:int",
+                    "value": "0"
+                },
+                {
+                    "idShort": "Altitude",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                },
+                {
+                    "idShort": "ClimbRate",
+                    "category": "VARIABLE",
+                    "modelType": "Property",
+                    "valueType": "xs:double",
+                    "value": "0.0"
+                }
+            ]
+        }
+    ]
+}
