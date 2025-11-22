@@ -64,7 +64,7 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 
 	// buffer for batching
 	const batchSize = 20
-	const flushInterval = 10 * time.Millisecond
+	const flushInterval = 5 * time.Millisecond
 
 	batch := make([]*core.AASUpdateEvent, 0, batchSize)
 	ticker := time.NewTicker(flushInterval)
@@ -108,35 +108,42 @@ func (e *Exporter) Stop() error {
 }
 
 func (e *Exporter) writeBatch(ctx context.Context, events []*core.AASUpdateEvent) error {
-	req := &ua.WriteRequest{
-		NodesToWrite: make([]*ua.WriteValue, len(events)),
-	}
+	nodesToWrite := make([]*ua.WriteValue, 0, len(events))
 
-	for i, event := range events {
+	for _, event := range events {
 		cacheKey := event.SubmodelID + "." + event.PropertyID
 		dataType, ok := e.typeCache[cacheKey]
 		if !ok {
 			var err error
 			dataType, err = e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
 			if err != nil {
-				return fmt.Errorf("AAS definition not found: %v", err)
+				log.Printf("[OPCUA Skip] Missing type for %s: %v", cacheKey, err)
+				continue
 			}
 			e.typeCache[cacheKey] = dataType
 		}
 
 		variant, err := e.convertToVariant(event.Value, dataType)
 		if err != nil {
+			log.Printf("[OPCUA Skip] Conversion failed for %s: %v", event.PropertyID, err)
 			continue
 		}
 
-		req.NodesToWrite[i] = &ua.WriteValue{
+		nodesToWrite = append(nodesToWrite, &ua.WriteValue{
 			NodeID:      e.generateNodeID(event.SubmodelID, event.PropertyID),
 			AttributeID: ua.AttributeIDValue,
 			Value: &ua.DataValue{
 				EncodingMask: ua.DataValueValue,
 				Value:        variant,
 			},
-		}
+		})
+	}
+
+	if len(nodesToWrite) == 0 {
+		return nil
+	}
+	req := &ua.WriteRequest{
+		NodesToWrite: nodesToWrite,
 	}
 
 	log.Printf("[OPCUA] Writing batch of %d events", len(events))
