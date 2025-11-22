@@ -27,32 +27,31 @@ type MavlinkAdapter struct {
 	address string
 	outChan chan<- *core.AASUpdateEvent
 
-	// mappingRules holds the loaded transformation logic, keyed by
-	// canonical MAVLink message name (e.g., "GPS_RAW_INT").
+	// mappingRules holds the loaded transformation logic.
 	mappingRules map[string][]config.MappingEntry
+
+	// Caches to optimize reflection performance (O(1) lookups)
+	typeNameCache   map[reflect.Type]string
+	fieldIndexCache map[reflect.Type]map[string]int
 }
 
 // NewAdapter creates a new MavlinkAdapter.
-// This function will be called by the NewInputAdapter factory.
 func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
-	// 1. Load the adapter-specific mapping file (e.g., mavlink.yaml)
 	mappingCfg, err := loadMapping(cfg.MappingFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load mavlink mapping file '%s': %w", cfg.MappingFile, err)
 	}
 	log.Printf("Mavlink adapter loaded mapping: %+v ", mappingCfg)
 
-	// 2. Create the mapping rules lookup map for efficient processing.
+	// Create the mapping rules lookup map.
 	rules := make(map[string][]config.MappingEntry)
 	for _, entry := range mappingCfg.Mappings {
-		// Normalize message name to canonical MAVLink uppercase (e.g., GPS_RAW_INT)
 		canonicalName := strings.ToUpper(entry.SourceMessage)
 		rules[canonicalName] = append(rules[canonicalName], entry)
 	}
-	log.Printf("Mavlink adapter loaded %d mapping rules for %d message types", len(mappingCfg.Mappings), len(rules))
-	log.Printf("Mavlink adapter mapping rules: %+v", rules)
+	log.Printf("Mavlink adapter loaded %d mapping rules", len(rules))
 
-	// 3. Configure the gomavlib endpoint based on config
+	// Configure the gomavlib endpoint.
 	var endpoint gomavlib.EndpointConf
 	switch cfg.Connection {
 	case "udp":
@@ -65,25 +64,25 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 		return nil, fmt.Errorf("unsupported mavlink connection type: %s", cfg.Connection)
 	}
 
-	// 4. Create the gomavlib node
 	node := &gomavlib.Node{
 		Endpoints:           []gomavlib.EndpointConf{endpoint},
 		Dialect:             common.Dialect,
 		HeartbeatDisable:    true,
-		StreamRequestEnable: true, // Automatically request streams from the UAV
+		StreamRequestEnable: true,
 		OutVersion:          2,
 		OutSystemID:         1,
 	}
 
-	err = node.Initialize()
-	if err != nil {
+	if err := node.Initialize(); err != nil {
 		return nil, fmt.Errorf("failed to initialize gomavlib node: %w", err)
 	}
 
 	return &MavlinkAdapter{
-		node:         node,
-		address:      cfg.Address,
-		mappingRules: rules,
+		node:            node,
+		address:         cfg.Address,
+		mappingRules:    rules,
+		typeNameCache:   make(map[reflect.Type]string),
+		fieldIndexCache: make(map[reflect.Type]map[string]int),
 	}, nil
 }
 
@@ -103,8 +102,7 @@ func loadMapping(path string) (*config.MappingConfig, error) {
 	return &cfg, nil
 }
 
-// Start begins the adapter's work loop, listening for MAVLink messages.
-// It now sends core.AASUpdateEvent messages to the outChan.
+// Start begins the adapter's work loop.
 func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpdateEvent) error {
 	a.outChan = outChan
 	log.Printf("Starting Mavlink adapter for %s", a.address)
@@ -119,8 +117,6 @@ func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpda
 			// Handle events from the gomavlib node
 			switch e := evt.(type) {
 			case *gomavlib.EventFrame:
-				// A MAVLink message frame was received
-				log.Printf("Received MAVLink message: %T", e.Frame.GetMessage())
 				a.handleFrame(e)
 
 			case *gomavlib.EventChannelOpen:
@@ -128,8 +124,6 @@ func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpda
 
 			case *gomavlib.EventChannelClose:
 				log.Printf("Mavlink channel closed")
-			default:
-				log.Printf("Mavlink adapter received unhandled event: %T", e)
 			}
 		}
 	}
@@ -145,80 +139,116 @@ func (a *MavlinkAdapter) Stop() error {
 }
 
 // handleFrame processes a received MAVLink message.
-// This is the core 1-step transformation logic.
 func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 	msg := e.Frame.GetMessage()
 	if msg == nil {
 		return
 	}
 
-	// Get canonical message name (e.g., "GPS_RAW_INT")
-	goTypeName := reflect.TypeOf(msg).Elem().Name()
-	canonical := goTypeToMavName(goTypeName)
+	// Resolve Canonical Name (Cached)
+	msgType := reflect.TypeOf(msg)
+	if msgType.Kind() == reflect.Ptr {
+		msgType = msgType.Elem()
+	}
 
-	// Check if we have any mapping rules for this message type
+	canonical, ok := a.typeNameCache[msgType]
+	if !ok {
+		canonical = goTypeToMavName(msgType.Name())
+		a.typeNameCache[msgType] = canonical
+	}
+
+	// Check if we have rules for this message type
 	rules, ok := a.mappingRules[canonical]
 	if !ok {
-		log.Printf("Message ignored: %s", canonical)
-		return // We don't care about this message, ignore it
+		return // Message ignored
 	}
-	// log.Printf("Processing message: %s", canonical)
 
-	ts := time.Now().UTC() // T0 and our TraceID
+	ts := time.Now().UTC()
 
-	// This message is mapped. Iterate through all rules defined for it.
+	// Iterate through all rules for this message
 	for _, entry := range rules {
-		// 1. Extract the specific source field (e.g., "Lat")
+		// Extract field using cached index lookup
 		rawValue, ok := a.extractField(msg, entry.SourceField)
 		if !ok {
-			log.Printf("Warning: field %s not found in message %s", entry.SourceField, canonical)
+			// Optional: log warning if needed, but skipping to reduce I/O in high freq
 			continue
 		}
 
-		// 2. Apply transformations (e.g., scale)
 		newValue, err := a.applyTransform(rawValue, entry.Scale)
 		if err != nil {
 			log.Printf("Warning: transform error for %s: %v", entry.SourceField, err)
 			continue
 		}
 
-		propertyPath := entry.GetPath()
-
 		updateEvent := &core.AASUpdateEvent{
 			SubmodelID: entry.TargetAASSubmodel,
-			PropertyID: propertyPath,
+			PropertyID: entry.GetPath(),
 			Value:      newValue,
 			Timestamp:  ts,
 		}
 
-		// T0: Record the ingress
 		instrumentation.Record("ADAPTER", updateEvent.PropertyID, updateEvent.Timestamp)
 
-		// 4. Send the event to the core
 		select {
 		case a.outChan <- updateEvent:
-			log.Printf("Sent AASUpdateEvent: %+v", updateEvent)
+			// Success
 		default:
 			log.Printf("Warning: AASUpdateEvent channel full. Discarding update for: %s", updateEvent.PropertyID)
 		}
 	}
 }
 
-// applyTransform applies configured transformations (like scaling) to a raw value.
+// extractField uses cached reflection indices to get a field's value quickly.
+func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (any, bool) {
+	rv := reflect.ValueOf(msg)
+	if rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
+	}
+	rt := rv.Type()
+
+	if rv.Kind() != reflect.Struct {
+		return nil, false
+	}
+
+	// Ensure cache map exists for this type
+	if a.fieldIndexCache[rt] == nil {
+		a.fieldIndexCache[rt] = make(map[string]int)
+	}
+
+	// Check cache for field index
+	idx, ok := a.fieldIndexCache[rt][fieldName]
+	if !ok {
+		// Not cached: Perform linear search to find index
+		found := false
+		for i := 0; i < rt.NumField(); i++ {
+			if rt.Field(i).Name == fieldName {
+				idx = i
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, false
+		}
+		// Store in cache
+		a.fieldIndexCache[rt][fieldName] = idx
+	}
+
+	// Fast access by index
+	return rv.Field(idx).Interface(), true
+}
+
+// applyTransform applies scaling.
 func (a *MavlinkAdapter) applyTransform(value any, scaleStr string) (any, error) {
-	// 1. No transformation needed
 	if scaleStr == "" {
 		return value, nil
 	}
 
-	// 2. Parse scale factor
 	scale, err := strconv.ParseFloat(scaleStr, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid scale value '%s': %w", scaleStr, err)
 	}
 
-	// 3. Apply scale based on the raw value's type
-	// We promote all scaled values to float64 for consistency in the AAS.
 	switch v := value.(type) {
 	case float64:
 		return v * scale, nil
@@ -247,14 +277,9 @@ func (a *MavlinkAdapter) applyTransform(value any, scaleStr string) (any, error)
 	}
 }
 
-// goTypeToMavName converts a Go struct type name for a generated MAVLink message
-// (for example: MessageGpsRawInt or MessageHeartbeat) into the canonical
-// MAVLink message name used in mappings (for example: GPS_RAW_INT or
-// HEARTBEAT).
+// goTypeToMavName converts Go struct name to Canonical MAVLink name.
 func goTypeToMavName(goName string) string {
-	// Drop leading "Message" prefix if present
 	goName = strings.TrimPrefix(goName, "Message")
-
 	var b strings.Builder
 	runes := []rune(goName)
 	for i, r := range runes {
@@ -274,24 +299,3 @@ func goTypeToMavName(goName string) string {
 
 func isUpper(r rune) bool { return r >= 'A' && r <= 'Z' }
 func isLower(r rune) bool { return r >= 'a' && r <= 'z' }
-
-// extractField uses reflection to get a single field's value from a
-// MAVLink message struct by its name.
-func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (any, bool) {
-	// Message implementations are pointers to structs.
-	rv := reflect.ValueOf(msg)
-	if rv.Kind() == reflect.Ptr {
-		rv = rv.Elem()
-	}
-	if rv.Kind() != reflect.Struct {
-		return nil, false
-	}
-
-	// Find the field by its Go struct name (e.g., "Lat", "Lon")
-	fieldValue := rv.FieldByName(fieldName)
-	if !fieldValue.IsValid() {
-		return nil, false // Field doesn't exist
-	}
-
-	return fieldValue.Interface(), true
-}
