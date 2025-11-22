@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
@@ -61,17 +62,38 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	defer e.client.Close(ctx)
 	log.Println("[OPCUA] Connected.")
 
+	// buffer for batching
+	const batchSize = 20
+	const flushInterval = 10 * time.Millisecond
+
+	batch := make([]*core.AASUpdateEvent, 0, batchSize)
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) > 0 {
+			if err := e.writeBatch(ctx, batch); err != nil {
+				log.Printf("[OPCUA Batch Error] %v", err)
+			}
+			// Clear batch
+			batch = batch[:0]
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-ticker.C:
+			flush()
 		case event, ok := <-inChan:
 			if !ok {
 				return nil
 			}
 			if event != nil {
-				if err := e.writeToNode(ctx, event); err != nil {
-					log.Printf("[OPCUA Error] %s: %v", event.PropertyID, err)
+				batch = append(batch, event)
+				if len(batch) >= batchSize {
+					flush()
 				}
 			}
 		}
@@ -85,48 +107,56 @@ func (e *Exporter) Stop() error {
 	return nil
 }
 
-func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) error {
-	cacheKey := event.SubmodelID + "." + event.PropertyID
-	dataType, ok := e.typeCache[cacheKey]
-	if !ok {
-		var err error
-		dataType, err = e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
-		if err != nil {
-			return fmt.Errorf("AAS definition not found: %v", err)
-		}
-		e.typeCache[cacheKey] = dataType
-	}
-
-	variant, err := e.convertToVariant(event.Value, dataType)
-	if err != nil {
-		return err
-	}
-
-	nodeID := e.generateNodeID(event.SubmodelID, event.PropertyID)
-
-	log.Printf("[OPCUA] Writing to NodeID %s: %v", nodeID.String(), variant.Value())
+func (e *Exporter) writeBatch(ctx context.Context, events []*core.AASUpdateEvent) error {
 	req := &ua.WriteRequest{
-		NodesToWrite: []*ua.WriteValue{
-			{
-				NodeID:      nodeID,
-				AttributeID: ua.AttributeIDValue,
-				Value: &ua.DataValue{
-					EncodingMask: ua.DataValueValue,
-					Value:        variant,
-				},
-			},
-		},
+		NodesToWrite: make([]*ua.WriteValue, len(events)),
 	}
+
+	for i, event := range events {
+		cacheKey := event.SubmodelID + "." + event.PropertyID
+		dataType, ok := e.typeCache[cacheKey]
+		if !ok {
+			var err error
+			dataType, err = e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
+			if err != nil {
+				return fmt.Errorf("AAS definition not found: %v", err)
+			}
+			e.typeCache[cacheKey] = dataType
+		}
+
+		variant, err := e.convertToVariant(event.Value, dataType)
+		if err != nil {
+			continue
+		}
+
+		req.NodesToWrite[i] = &ua.WriteValue{
+			NodeID:      e.generateNodeID(event.SubmodelID, event.PropertyID),
+			AttributeID: ua.AttributeIDValue,
+			Value: &ua.DataValue{
+				EncodingMask: ua.DataValueValue,
+				Value:        variant,
+			},
+		}
+	}
+
+	log.Printf("[OPCUA] Writing batch of %d events", len(events))
 
 	resp, err := e.client.Write(ctx, req)
-	instrumentation.Record("EXPORTER", event.PropertyID, event.Timestamp)
-
 	if err != nil {
 		return err
 	}
-	if len(resp.Results) > 0 && resp.Results[0] != ua.StatusOK {
-		return fmt.Errorf("status: %v", resp.Results[0])
+
+	// T1: Record the egress for all events in the batch
+	for _, event := range events {
+		instrumentation.Record("EXPORTER", event.PropertyID, event.Timestamp)
 	}
+
+	for i, status := range resp.Results {
+		if status != ua.StatusOK {
+			log.Printf("[OPCUA Write Error] Node %s: %v", req.NodesToWrite[i].NodeID.String(), status)
+		}
+	}
+
 	return nil
 }
 
