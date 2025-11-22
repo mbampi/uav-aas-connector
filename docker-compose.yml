@@ -1,0 +1,26 @@
+services:
+  uav-aas-connector:
+    build: .
+    container_name: uav-aas-connector
+    restart: unless-stopped
+    
+    # Mount the local config directory into the container.
+    # This allows you to edit mappings/json on your host and 
+    # simply restart the container to apply changes.
+    volumes:
+      - ./config:/app/config
+      # Persist latency logs to host for analysis
+      - ./latency.log:/app/latency.log
+
+    ports:
+      # Input: MAVLink
+      - "14550:14550/udp"
+      
+      # Output: HTTP Exporter
+      - "8080:8080"
+      
+      # Output: OPC UA Exporter
+      - "4840:4840"
+
+    # 'host' network mode is faster for high-frequency UDP as it bypasses the Docker NAT. 
+    # network_mode: host
