@@ -17,10 +17,12 @@ import (
 )
 
 type Exporter struct {
-	client    *opcua.Client
-	core      *core.AASCore
-	endpoint  string
+	client   *opcua.Client
+	core     *core.AASCore
+	endpoint string
+
 	namespace uint16
+	typeCache map[string]aastypes.DataTypeDefXSD
 }
 
 func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, error) {
@@ -47,6 +49,7 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 		core:      core,
 		endpoint:  endpoint,
 		namespace: ns,
+		typeCache: make(map[string]aastypes.DataTypeDefXSD),
 	}, nil
 }
 
@@ -83,9 +86,15 @@ func (e *Exporter) Stop() error {
 }
 
 func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) error {
-	dataType, err := e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
-	if err != nil {
-		return fmt.Errorf("AAS definition not found: %v", err)
+	cacheKey := event.SubmodelID + "." + event.PropertyID
+	dataType, ok := e.typeCache[cacheKey]
+	if !ok {
+		var err error
+		dataType, err = e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
+		if err != nil {
+			return fmt.Errorf("AAS definition not found: %v", err)
+		}
+		e.typeCache[cacheKey] = dataType
 	}
 
 	variant, err := e.convertToVariant(event.Value, dataType)
