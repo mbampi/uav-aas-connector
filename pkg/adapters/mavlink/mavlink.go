@@ -162,7 +162,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 		log.Printf("Message ignored: %s", canonical)
 		return // We don't care about this message, ignore it
 	}
-	log.Printf("Processing message: %s", canonical)
+	// log.Printf("Processing message: %s", canonical)
 
 	ts := time.Now().UTC() // T0 and our TraceID
 
@@ -178,14 +178,15 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 		// 2. Apply transformations (e.g., scale)
 		newValue, err := a.applyTransform(rawValue, entry.Scale)
 		if err != nil {
-			log.Printf("Warning: failed to apply transform for %s: %v", entry.SourceField, err)
+			log.Printf("Warning: transform error for %s: %v", entry.SourceField, err)
 			continue
 		}
 
-		// 3. Create the specific AASUpdateEvent
+		propertyPath := entry.GetPath()
+
 		updateEvent := &core.AASUpdateEvent{
 			SubmodelID: entry.TargetAASSubmodel,
-			PropertyID: entry.TargetAASProperty,
+			PropertyID: propertyPath,
 			Value:      newValue,
 			Timestamp:  ts,
 		}

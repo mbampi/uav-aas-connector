@@ -42,14 +42,23 @@ type MappingConfig struct {
 
 // MappingEntry represents a single mapping from a data source to an AAS property.
 type MappingEntry struct {
-	SourceMessage     string `yaml:"sourceMessage"`     // e.g., "GPS_RAW_INT"
-	SourceField       string `yaml:"sourceField"`       // e.g., "Lat"
-	TargetAASSubmodel string `yaml:"targetAASSubmodel"` // idShort e.g., "Navigation"
-	TargetAASProperty string `yaml:"targetAASProperty"` // idShort e.g., "Latitude"
-	Scale             string `yaml:"scale,omitempty"`   // e.g., "0.0000001"
+	SourceMessage       string `yaml:"sourceMessage"`                 // e.g., "GPS_RAW_INT"
+	SourceField         string `yaml:"sourceField"`                   // e.g., "Lat"
+	TargetAASSubmodel   string `yaml:"targetAASSubmodel"`             // idShort e.g., "Navigation"
+	TargetAASCollection string `yaml:"targetAASCollection,omitempty"` // idShort e.g., "Position"
+	TargetAASProperty   string `yaml:"targetAASProperty"`             // idShort e.g., "Latitude"
+	Scale               string `yaml:"scale,omitempty"`               // e.g., "0.0000001"
 }
 
-// LoadConfig loads the configuration from the specified YAML file.
+// GetPath constructs the full AAS property path (dot-notation).
+// This keeps the Adapter logic simple and generic.
+func (m MappingEntry) GetPath() string {
+	if m.TargetAASCollection != "" {
+		return fmt.Sprintf("%s.%s", m.TargetAASCollection, m.TargetAASProperty)
+	}
+	return m.TargetAASProperty
+}
+
 func LoadConfig(path string) (*Config, error) {
 	file, err := os.Open(path)
 	if err != nil {

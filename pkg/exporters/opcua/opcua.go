@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
@@ -17,9 +18,9 @@ import (
 
 type Exporter struct {
 	client    *opcua.Client
-	core      *core.AASCore // Reference to core to query types
+	core      *core.AASCore
 	endpoint  string
-	namespace int
+	namespace uint16
 }
 
 func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, error) {
@@ -27,25 +28,30 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 	if cfg.Host != "" {
 		host = cfg.Host
 	}
-	endpoint := fmt.Sprintf("opc.tcp://%s:%d/freeopcua/server/", host, cfg.Port)
+	endpoint := fmt.Sprintf("opc.tcp://%s:%d", host, cfg.Port)
 
 	log.Printf("[OPCUA] Initializing exporter for: %s", endpoint)
 
-	c, err := opcua.NewClient(endpoint, opcua.SecurityMode(ua.MessageSecurityModeNone))
+	c, err := opcua.NewClient(endpoint,
+		opcua.SecurityMode(ua.MessageSecurityModeNone),
+		opcua.AuthAnonymous(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OPC UA client: %w", err)
 	}
 
+	ns := uint16(2)
+
 	return &Exporter{
 		client:    c,
-		core:      core, // Store the core
+		core:      core,
 		endpoint:  endpoint,
-		namespace: 2,
+		namespace: ns,
 	}, nil
 }
 
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	log.Printf("[OPCUA] Connecting...")
+	log.Printf("[OPCUA] Connecting to %s (NS=%d)...", e.endpoint, e.namespace)
 	if err := e.client.Connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
@@ -58,15 +64,12 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			return nil
 		case event, ok := <-inChan:
 			if !ok {
-				log.Println("[OPCUA] Input channel closed, stopping.")
 				return nil
 			}
-			if event == nil {
-				continue
-			}
-			if err := e.writeDynamic(ctx, event); err != nil {
-				// Log debug only to avoid flooding if a node doesn't exist yet
-				// log.Printf("[OPCUA Debug] Write failed for %s: %v", event.PropertyID, err)
+			if event != nil {
+				if err := e.writeToNode(ctx, event); err != nil {
+					log.Printf("[OPCUA Error] %s: %v", event.PropertyID, err)
+				}
 			}
 		}
 	}
@@ -79,28 +82,24 @@ func (e *Exporter) Stop() error {
 	return nil
 }
 
-func (e *Exporter) writeDynamic(ctx context.Context, event *core.AASUpdateEvent) error {
-	// 1. Query the AAS Model for the definition of this property
+func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) error {
 	dataType, err := e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
 	if err != nil {
-		return fmt.Errorf("unknown property in AAS: %w", err)
+		return fmt.Errorf("AAS definition not found: %v", err)
 	}
 
-	// 2. Convert string value to the specific OPC UA Variant
 	variant, err := e.convertToVariant(event.Value, dataType)
 	if err != nil {
 		return err
 	}
 
-	// 3. Construct NodeID dynamically based on the Property Path
-	// Example: PropertyID="Position.Latitude" -> NodeID="ns=2;s=Position.Latitude"
-	// This requires the OPC UA Server to use the same naming convention.
-	id := ua.NewStringNodeID(uint16(e.namespace), event.PropertyID)
+	nodeID := e.generateNodeID(event.SubmodelID, event.PropertyID)
 
+	log.Printf("[OPCUA] Writing to NodeID %s: %v", nodeID.String(), variant.Value())
 	req := &ua.WriteRequest{
 		NodesToWrite: []*ua.WriteValue{
 			{
-				NodeID:      id,
+				NodeID:      nodeID,
 				AttributeID: ua.AttributeIDValue,
 				Value: &ua.DataValue{
 					EncodingMask: ua.DataValueValue,
@@ -111,9 +110,6 @@ func (e *Exporter) writeDynamic(ctx context.Context, event *core.AASUpdateEvent)
 	}
 
 	resp, err := e.client.Write(ctx, req)
-
-	// T2: Record egress time
-	// We use event.Timestamp (T0) as the TraceID
 	instrumentation.Record("EXPORTER", event.PropertyID, event.Timestamp)
 
 	if err != nil {
@@ -122,35 +118,36 @@ func (e *Exporter) writeDynamic(ctx context.Context, event *core.AASUpdateEvent)
 	if len(resp.Results) > 0 && resp.Results[0] != ua.StatusOK {
 		return fmt.Errorf("status: %v", resp.Results[0])
 	}
-
 	return nil
 }
 
-// convertToVariant maps AAS XSD Types -> Go Types -> OPC UA Variants
-// Optimized: accepts 'any' to allow direct float64 handling
-func (e *Exporter) convertToVariant(val any, aasType aastypes.DataTypeDefXSD) (*ua.Variant, error) {
+func (e *Exporter) generateNodeID(submodelID, propertyPath string) *ua.NodeID {
+	// AAS path "GlobalPosition.Latitude" -> "GlobalPosition/Latitude"
+	hierarchy := strings.ReplaceAll(propertyPath, ".", "/")
+	// Full string "Navigation/GlobalPosition/Latitude"
+	fullPath := fmt.Sprintf("%s/%s", submodelID, hierarchy)
+	return ua.NewStringNodeID(e.namespace, fullPath)
+}
 
-	// If val is already a float64 (from MAVLink adapter), use it directly.
+func (e *Exporter) convertToVariant(val any, aasType aastypes.DataTypeDefXSD) (*ua.Variant, error) {
+	// Fast path for MAVLink floats
 	if f, ok := val.(float64); ok {
 		switch aasType {
 		case aastypes.DataTypeDefXSDDouble:
 			return ua.MustVariant(f), nil
 		case aastypes.DataTypeDefXSDFloat:
 			return ua.MustVariant(float32(f)), nil
-		case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger,
-			aastypes.DataTypeDefXSDPositiveInteger, aastypes.DataTypeDefXSDNonNegativeInteger:
+		case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger:
 			return ua.MustVariant(int32(f)), nil
+		case aastypes.DataTypeDefXSDShort:
+			return ua.MustVariant(int16(f)), nil
 		case aastypes.DataTypeDefXSDBoolean:
 			return ua.MustVariant(f != 0), nil
-		default:
-			// For other types (e.g. string), fall through to the string conversion below
 		}
 	}
 
-	// Fallback: Convert to string and parse.
-	// This handles types not handled in the fast path.
+	// Fallback string parsing
 	valStr := fmt.Sprintf("%v", val)
-
 	switch aasType {
 	case aastypes.DataTypeDefXSDBoolean:
 		v, err := strconv.ParseBool(valStr)
@@ -158,44 +155,30 @@ func (e *Exporter) convertToVariant(val any, aasType aastypes.DataTypeDefXSD) (*
 			return nil, err
 		}
 		return ua.MustVariant(v), nil
-
 	case aastypes.DataTypeDefXSDFloat:
 		v, err := strconv.ParseFloat(valStr, 32)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(float32(v)), nil
-
 	case aastypes.DataTypeDefXSDDouble:
 		v, err := strconv.ParseFloat(valStr, 64)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(v), nil
-
-	case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDPositiveInteger, aastypes.DataTypeDefXSDNonNegativeInteger:
-		// Try parsing as int first
-		if v, err := strconv.ParseInt(valStr, 10, 32); err == nil {
-			return ua.MustVariant(int32(v)), nil
-		}
-		// Fallback: Parse as float and cast to int (handles "12.0")
-		if f, err := strconv.ParseFloat(valStr, 64); err == nil {
-			return ua.MustVariant(int32(f)), nil
-		}
-		return nil, fmt.Errorf("cannot parse '%s' as int32", valStr)
-
-	case aastypes.DataTypeDefXSDLong, aastypes.DataTypeDefXSDInteger:
-		v, err := strconv.ParseInt(valStr, 10, 64)
+	case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger:
+		v, err := strconv.ParseInt(valStr, 10, 32)
 		if err != nil {
+			if f, err2 := strconv.ParseFloat(valStr, 64); err2 == nil {
+				return ua.MustVariant(int32(f)), nil
+			}
 			return nil, err
 		}
-		return ua.MustVariant(v), nil
-
+		return ua.MustVariant(int32(v)), nil
 	case aastypes.DataTypeDefXSDString:
 		return ua.MustVariant(valStr), nil
-
 	default:
-		// Fallback for complex types or unknowns
 		return ua.MustVariant(valStr), nil
 	}
 }

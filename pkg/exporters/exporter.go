@@ -7,6 +7,7 @@ import (
 	"uav-aas-connector/pkg/core"
 	"uav-aas-connector/pkg/exporters/dummy"
 	"uav-aas-connector/pkg/exporters/http"
+	"uav-aas-connector/pkg/exporters/opcua"
 )
 
 // OutputExporter is the interface for all "Load" components.
@@ -30,7 +31,7 @@ func NewOutputExporter(cfg config.ExporterConfig, core *core.AASCore) (OutputExp
 
 	switch cfg.Type {
 	case "opcua":
-		// return opcua.NewExporter(cfg, core)
+		return opcua.NewExporter(cfg, core)
 	case "http":
 		return http.NewExporter(cfg, core)
 	case "dummy":
@@ -38,6 +39,4 @@ func NewOutputExporter(cfg config.ExporterConfig, core *core.AASCore) (OutputExp
 	default:
 		return nil, fmt.Errorf("unknown exporter type: %s", cfg.Type)
 	}
-
-	return nil, nil
 }
