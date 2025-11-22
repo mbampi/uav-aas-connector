@@ -138,7 +138,7 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 	c.modelMutex.Lock()
 	defer c.modelMutex.Unlock()
 
-	subChan := make(chan *AASUpdateEvent, 100)
+	subChan := make(chan *AASUpdateEvent, 1000)
 	c.subscribers = append(c.subscribers, subChan)
 
 	go func() {

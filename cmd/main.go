@@ -35,7 +35,7 @@ func main() {
 	defer cancel()
 
 	// Start Input Adapter
-	rawChan := make(chan *core.AASUpdateEvent, 100)
+	rawChan := make(chan *core.AASUpdateEvent, 1000)
 	adapter, err := adapters.NewInputAdapter(cfg.InputAdapter)
 	if err != nil {
 		log.Fatalf("Failed to create adapter: %v", err)
