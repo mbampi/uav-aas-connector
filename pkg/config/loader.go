@@ -55,15 +55,24 @@ type MappingEntry struct {
 	TargetAASCollection string `yaml:"targetAASCollection,omitempty"` // idShort e.g., "Position"
 	TargetAASProperty   string `yaml:"targetAASProperty"`             // idShort e.g., "Latitude"
 	Scale               string `yaml:"scale,omitempty"`               // e.g., "0.0000001"
+
+	Path string `yaml:",omitempty"` // cached full dot-notation path
 }
 
 // GetPath constructs the full AAS property path (dot-notation).
 // This keeps the Adapter logic simple and generic.
 func (m MappingEntry) GetPath() string {
-	if m.TargetAASCollection != "" {
-		return fmt.Sprintf("%s.%s", m.TargetAASCollection, m.TargetAASProperty)
+	if m.Path != "" {
+		return m.Path
 	}
-	return m.TargetAASProperty
+
+	if m.TargetAASCollection != "" {
+		path := fmt.Sprintf("%s.%s", m.TargetAASCollection, m.TargetAASProperty)
+		m.Path = path
+		return m.Path
+	}
+	m.Path = m.TargetAASProperty
+	return m.Path
 }
 
 func LoadConfig(path string) (*Config, error) {
