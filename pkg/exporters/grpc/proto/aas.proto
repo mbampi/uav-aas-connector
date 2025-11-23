@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package aas;
+
+option go_package = "uav-aas-connector/pkg/exporters/grpc/proto";
+
+service AASIngest {
+  // Client Streaming: The Connector opens a stream and pushes many updates.
+  rpc StreamUpdates (stream UpdateRequest) returns (IngestResponse);
+}
+
+message UpdateRequest {
+  string submodel_id = 1;   // e.g., "Navigation"
+  string property_path = 2; // e.g., "Position.Latitude"
+  int64 timestamp_ns = 3;   // Unix Nanoseconds
+  
+  // Handle dynamic types from AAS
+  oneof value {
+    double double_val = 4;
+    int32 int_val = 5;
+    string string_val = 6;
+    bool bool_val = 7;
+  }
+}
+
+message IngestResponse {
+  bool success = 1;
+  string message = 2;
+}

@@ -6,6 +6,7 @@ import (
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
 	"uav-aas-connector/pkg/exporters/dummy"
+	"uav-aas-connector/pkg/exporters/grpc"
 	"uav-aas-connector/pkg/exporters/http"
 	"uav-aas-connector/pkg/exporters/mqtt"
 	"uav-aas-connector/pkg/exporters/opcua"
@@ -37,6 +38,8 @@ func NewOutputExporter(cfg config.ExporterConfig, core *core.AASCore) (OutputExp
 		return http.NewExporter(cfg, core)
 	case "mqtt":
 		return mqtt.NewExporter(cfg)
+	case "grpc":
+		return grpc.NewExporter(cfg)
 	case "dummy":
 		return dummy.NewDummyExporter(cfg), nil
 	default:
