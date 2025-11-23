@@ -24,22 +24,14 @@ services:
     # 'host' network mode is faster for high-frequency UDP as it bypasses the Docker NAT. 
     # network_mode: host
 
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
-    container_name: cadvisor
-    command:
-      - "-housekeeping_interval=500ms"
-      - "-docker_only=true"
-    restart: unless-stopped
-    privileged: true
+  metrics-collector:
+    build: ./resource_metrics
+    container_name: metrics-collector
     volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    ports:
-      - "8081:8080"
-    devices:
-      - /dev/kmsg
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./metrics_data:/output
+    environment:
+      - TARGET_CONTAINER=uav-aas-connector
+      - DURATION_SEC=660
+      - INTERVAL_SEC=0.5
+    restart: "no"
