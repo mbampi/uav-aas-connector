@@ -22,8 +22,9 @@ type Exporter struct {
 	core     *core.AASCore
 	endpoint string
 
-	namespace uint16
-	typeCache map[string]aastypes.DataTypeDefXSD
+	namespace   uint16
+	typeCache   map[string]aastypes.DataTypeDefXSD
+	nodeIDCache map[string]*ua.NodeID
 }
 
 // NewExporter creates a new OPC UA exporter instance.
@@ -91,8 +92,9 @@ func (e *Exporter) Stop() error {
 
 // writeToNode writes the given AAS update event to the corresponding OPC UA node.
 func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) error {
-	// 1. Check Cache for DataType (Avoids Core Lock)
 	cacheKey := event.SubmodelID + "." + event.PropertyID
+
+	// 1. Check Cache for DataType (Avoids Core Lock)
 	dataType, ok := e.typeCache[cacheKey]
 	if !ok {
 		var err error
@@ -109,9 +111,14 @@ func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) 
 		return err
 	}
 
-	nodeID := e.generateNodeID(event.SubmodelID, event.PropertyID)
+	// 3. Check Cache for NodeID
+	nodeID, ok := e.nodeIDCache[cacheKey]
+	if !ok {
+		nodeID = e.generateNodeID(event.SubmodelID, event.PropertyID)
+		e.nodeIDCache[cacheKey] = nodeID
+	}
 
-	// 3. Create Request
+	// 4. Create Request
 	req := &ua.WriteRequest{
 		NodesToWrite: []*ua.WriteValue{
 			{
@@ -125,11 +132,12 @@ func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) 
 		},
 	}
 
-	// 4. Send Request
+	instrumentation.Record("EXPORTER", event.PropertyID, event.Timestamp)
+
+	// 5. Send Request
 	resp, err := e.client.Write(ctx, req)
 
-	// Record Egress Time
-	instrumentation.Record("EXPORTER", event.PropertyID, event.Timestamp)
+	instrumentation.Record("WROTE", event.PropertyID, event.Timestamp)
 
 	if err != nil {
 		return err
