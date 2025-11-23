@@ -132,12 +132,12 @@ func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) 
 		},
 	}
 
-	instrumentation.Record("EXPORTER", event.PropertyID, event.Timestamp)
+	instrumentation.Record("OPCUA_SENDING", event.PropertyID, event.Timestamp)
 
 	// 5. Send Request
 	resp, err := e.client.Write(ctx, req)
 
-	instrumentation.Record("WROTE", event.PropertyID, event.Timestamp)
+	instrumentation.Record("OPCUA_SENT", event.PropertyID, event.Timestamp)
 
 	if err != nil {
 		return err
