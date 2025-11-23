@@ -16,6 +16,7 @@ import (
 	"github.com/gopcua/opcua/ua"
 )
 
+// Exporter implements an OPC UA output exporter for the UAV AAS Connector.
 type Exporter struct {
 	client   *opcua.Client
 	core     *core.AASCore
@@ -25,6 +26,7 @@ type Exporter struct {
 	typeCache map[string]aastypes.DataTypeDefXSD
 }
 
+// NewExporter creates a new OPC UA exporter instance.
 func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, error) {
 	host := "localhost"
 	if cfg.Host != "" {
@@ -53,6 +55,7 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 	}, nil
 }
 
+// Start begins processing AAS update events and exporting them to the OPC UA server.
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
 	log.Printf("[OPCUA] Connecting to %s (NS=%d)...", e.endpoint, e.namespace)
 	if err := e.client.Connect(ctx); err != nil {
@@ -78,6 +81,7 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	}
 }
 
+// Stop terminates the OPC UA exporter and closes the client connection.
 func (e *Exporter) Stop() error {
 	if e.client != nil {
 		return e.client.Close(context.Background())
@@ -85,6 +89,7 @@ func (e *Exporter) Stop() error {
 	return nil
 }
 
+// writeToNode writes the given AAS update event to the corresponding OPC UA node.
 func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) error {
 	// 1. Check Cache for DataType (Avoids Core Lock)
 	cacheKey := event.SubmodelID + "." + event.PropertyID
@@ -135,6 +140,7 @@ func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) 
 	return nil
 }
 
+// generateNodeID creates an OPC UA NodeID for the given submodel and property path.
 func (e *Exporter) generateNodeID(submodelID, propertyPath string) *ua.NodeID {
 	// AAS path "GlobalPosition.Latitude" -> "GlobalPosition/Latitude"
 	hierarchy := strings.ReplaceAll(propertyPath, ".", "/")
@@ -143,8 +149,8 @@ func (e *Exporter) generateNodeID(submodelID, propertyPath string) *ua.NodeID {
 	return ua.NewStringNodeID(e.namespace, fullPath)
 }
 
+// convertToVariant converts a value to an OPC UA Variant based on the specified AAS data type.
 func (e *Exporter) convertToVariant(val any, aasType aastypes.DataTypeDefXSD) (*ua.Variant, error) {
-	// Fast path for MAVLink floats
 	if f, ok := val.(float64); ok {
 		switch aasType {
 		case aastypes.DataTypeDefXSDDouble:
