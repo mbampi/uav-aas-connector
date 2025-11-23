@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path"
 	"syscall"
 	"time"
 	"uav-aas-connector/pkg/adapters"
@@ -20,12 +21,6 @@ import (
 // 4. Handle graceful shutdown on interrupt signal.
 
 func main() {
-	// Initialize Latency Logger
-	if err := instrumentation.Init("latency.log"); err != nil {
-		log.Fatalf("Failed to init instrumentation: %v", err)
-	}
-	defer instrumentation.Close()
-
 	cfg, err := config.LoadConfig("config/config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -33,6 +28,12 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	latencyPath := path.Join(cfg.Advanced.MetricsPath, "latency.log")
+	if err := instrumentation.Init(latencyPath); err != nil {
+		log.Fatalf("Failed to init instrumentation: %v", err)
+	}
+	defer instrumentation.Close()
 
 	// Start Input Adapter
 	rawChan := make(chan *core.AASUpdateEvent, 1000)

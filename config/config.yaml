@@ -23,8 +23,8 @@ exporters:
     type: "opcua"
     enabled: true
     port: 4840
-    host: "0.0.0.0"
+    host: "host.docker.internal"
   
 advanced:
   log_level: "debug"
-  max_retries: 3
+  metrics_path: "/metrics"

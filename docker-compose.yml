@@ -9,8 +9,7 @@ services:
     # simply restart the container to apply changes.
     volumes:
       - ./config:/app/config
-      # Persist latency logs to host for analysis
-      - ./latency.log:/app/latency.log
+      - ./metrics:/app/metrics
 
     ports:
       # Input: MAVLink
@@ -31,14 +30,16 @@ services:
     command:
       - "-housekeeping_interval=500ms"
       - "-docker_only=true"
+    restart: unless-stopped
+    privileged: true
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
-      - "8081:8080" # Access web UI at localhost:8081
+      - "8081:8080"
     devices:
       - /dev/kmsg
-    privileged: true

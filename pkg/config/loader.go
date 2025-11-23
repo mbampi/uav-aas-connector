@@ -12,6 +12,7 @@ type Config struct {
 	InputAdapter    AdapterConfig             `yaml:"adapter"`
 	OutputExporters map[string]ExporterConfig `yaml:"exporters"`
 	AAS             AASConfig                 `yaml:"aas"`
+	Advanced        AdvancedConfig            `yaml:"advanced"`
 }
 
 // AASConfig represents the configuration specific to the Asset Administration Shell.
@@ -33,6 +34,12 @@ type ExporterConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Port    int    `yaml:"port"`
 	Host    string `yaml:"host,omitempty"`
+}
+
+// AdvancedConfig represents advanced configuration options.
+type AdvancedConfig struct {
+	MetricsPath string `yaml:"metrics_path"` // e.g., "/metrics"
+	LogLevel    string `yaml:"log_level"`    // e.g., "debug", "info", "warn", "error"
 }
 
 // MappingConfig represents the mapping from data source fields to AAS properties.
