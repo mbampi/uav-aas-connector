@@ -34,6 +34,10 @@ type ExporterConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Port    int    `yaml:"port"`
 	Host    string `yaml:"host,omitempty"`
+
+	// MQTT specific
+	ClientID    string `yaml:"clientID,omitempty"`
+	TopicPrefix string `yaml:"topicPrefix,omitempty"`
 }
 
 // AdvancedConfig represents advanced configuration options.

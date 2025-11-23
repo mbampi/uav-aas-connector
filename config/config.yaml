@@ -23,8 +23,15 @@ exporters:
     type: "opcua"
     enabled: true
     port: 4840
-    host: "host.docker.internal"
+    host: "192.168.0.17"
+  
+  mqtt_broker:
+    type: mqtt
+    enabled: true
+    host: "tcp://localhost:1883" 
+    client_id: "uav-connector-01"
+    topic_prefix: "aas/uav-1"
   
 advanced:
   log_level: "debug"
-  metrics_path: "/metrics"
+  metrics_path: "metrics/"
