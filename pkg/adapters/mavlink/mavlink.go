@@ -170,11 +170,24 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 		// Extract field using cached index lookup
 		rawValue, ok := a.extractField(msg, entry.SourceField)
 		if !ok {
-			// Optional: log warning if needed, but skipping to reduce I/O in high freq
 			continue
 		}
 
-		newValue, err := a.applyTransform(rawValue, entry.Scale)
+		var valueToPass any = rawValue
+
+		rv := reflect.ValueOf(rawValue)
+		if rv.IsValid() {
+			k := rv.Kind()
+			// Handle signed integers (including enums like MavState)
+			if k >= reflect.Int && k <= reflect.Int64 {
+				valueToPass = rv.Int() // Standardizes to int64
+			}
+			// Handle unsigned integers (including enums like MavType)
+			if k >= reflect.Uint && k <= reflect.Uint64 {
+				valueToPass = rv.Uint() // Standardizes to uint64
+			}
+		}
+		newValue, err := a.applyTransform(valueToPass, entry.Scale)
 		if err != nil {
 			log.Printf("Warning: transform error for %s: %v", entry.SourceField, err)
 			continue
