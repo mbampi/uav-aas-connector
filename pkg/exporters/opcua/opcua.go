@@ -159,19 +159,47 @@ func (e *Exporter) generateNodeID(submodelID, propertyPath string) *ua.NodeID {
 
 // convertToVariant converts a value to an OPC UA Variant based on the specified AAS data type.
 func (e *Exporter) convertToVariant(val any, aasType aastypes.DataTypeDefXSD) (*ua.Variant, error) {
-	if f, ok := val.(float64); ok {
+	// Direct type matches
+	switch v := val.(type) {
+	case float64:
 		switch aasType {
 		case aastypes.DataTypeDefXSDDouble:
-			return ua.MustVariant(f), nil
+			return ua.MustVariant(v), nil
 		case aastypes.DataTypeDefXSDFloat:
-			return ua.MustVariant(float32(f)), nil
+			return ua.MustVariant(float32(v)), nil
 		case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger:
-			return ua.MustVariant(int32(f)), nil
+			return ua.MustVariant(int32(v)), nil
 		case aastypes.DataTypeDefXSDShort:
-			return ua.MustVariant(int16(f)), nil
+			return ua.MustVariant(int16(v)), nil
 		case aastypes.DataTypeDefXSDBoolean:
-			return ua.MustVariant(f != 0), nil
+			return ua.MustVariant(v != 0), nil
 		}
+	case int64:
+		return ua.MustVariant(int32(v)), nil // OPC UA usually expects Int32
+	case uint64:
+		return ua.MustVariant(uint32(v)), nil
+	case bool:
+		return ua.MustVariant(v), nil
+	case []float64:
+		return ua.MustVariant(v), nil
+	case []float32:
+		return ua.MustVariant(v), nil
+	case []int32:
+		return ua.MustVariant(v), nil
+	case []uint32:
+		return ua.MustVariant(v), nil
+	case []uint16:
+		arr := make([]uint32, len(v))
+		for i, x := range v {
+			arr[i] = uint32(x)
+		}
+		return ua.MustVariant(arr), nil
+	case []int:
+		arr := make([]int32, len(v))
+		for i, x := range v {
+			arr[i] = int32(x)
+		}
+		return ua.MustVariant(arr), nil
 	}
 
 	// Fallback string parsing
