@@ -66,18 +66,49 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	defer e.client.Close(ctx)
 	log.Println("[OPCUA] Connected.")
 
+	const maxBatchSize = 100
+	batch := make([]*core.AASUpdateEvent, 0, maxBatchSize)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case event, ok := <-inChan:
+
+		// 1. Block waiting for at least one event
+		case firstEvent, ok := <-inChan:
 			if !ok {
 				return nil
 			}
-			if event != nil {
-				if err := e.writeToNode(ctx, event); err != nil {
-					log.Printf("[OPCUA Error] %s (value=%v): %v", event.PropertyID, event.Value, err)
+			if firstEvent != nil {
+				batch = append(batch, firstEvent)
+			}
+
+			// 2. Opportunistic Loop: Drain the channel efficiently
+			// If 50 items are waiting, we grab them ALL instantly.
+			// If 0 items are waiting, the 'default' case fires and we send immediately.
+		DrainLoop:
+			for len(batch) < maxBatchSize {
+				select {
+				case event, ok := <-inChan:
+					if !ok {
+						break DrainLoop // Channel closed
+					}
+					if event != nil {
+						batch = append(batch, event)
+					}
+				default:
+					// Channel is empty. Stop collecting and send what we have.
+					break DrainLoop
 				}
+			}
+
+			// 3. Send the batch
+			if len(batch) > 0 {
+				if err := e.writeBatch(ctx, batch); err != nil {
+					log.Printf("[OPCUA Error] Batch failed: %v", err)
+				}
+				// Clear buffer, keeping capacity for performance
+				batch = batch[:0]
 			}
 		}
 	}
@@ -91,17 +122,17 @@ func (e *Exporter) Stop() error {
 	return nil
 }
 
-// writeToNode writes the given AAS update event to the corresponding OPC UA node.
-func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) error {
+// prepareWriteValue creates the OPC UA write structure but does not send it.
+func (e *Exporter) prepareWriteValue(event *core.AASUpdateEvent) (*ua.WriteValue, error) {
 	cacheKey := event.SubmodelID + "." + event.PropertyID
 
-	// 1. Check Cache for DataType (Avoids Core Lock)
+	// 1. Check Cache for DataType
 	dataType, ok := e.typeCache[cacheKey]
 	if !ok {
 		var err error
 		dataType, err = e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
 		if err != nil {
-			return fmt.Errorf("AAS definition not found: %v", err)
+			return nil, fmt.Errorf("AAS definition not found: %v", err)
 		}
 		e.typeCache[cacheKey] = dataType
 	}
@@ -109,7 +140,7 @@ func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) 
 	// 2. Convert Value
 	variant, err := e.convertToVariant(event.Value, dataType)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// 3. Check Cache for NodeID
@@ -119,32 +150,54 @@ func (e *Exporter) writeToNode(ctx context.Context, event *core.AASUpdateEvent) 
 		e.nodeIDCache[cacheKey] = nodeID
 	}
 
-	// 4. Create Request
-	req := &ua.WriteRequest{
-		NodesToWrite: []*ua.WriteValue{
-			{
-				NodeID:      nodeID,
-				AttributeID: ua.AttributeIDValue,
-				Value: &ua.DataValue{
-					EncodingMask: ua.DataValueValue,
-					Value:        variant,
-				},
-			},
+	// 4. Return the structure instead of sending
+	return &ua.WriteValue{
+		NodeID:      nodeID,
+		AttributeID: ua.AttributeIDValue,
+		Value: &ua.DataValue{
+			EncodingMask: ua.DataValueValue,
+			Value:        variant,
 		},
+	}, nil
+}
+
+// writeBatch sends multiple events in a single OPC UA network packet.
+func (e *Exporter) writeBatch(ctx context.Context, events []*core.AASUpdateEvent) error {
+	nodesToWrite := make([]*ua.WriteValue, 0, len(events))
+
+	for _, event := range events {
+		wv, err := e.prepareWriteValue(event)
+		if err != nil {
+			log.Printf("[OPCUA Warning] Skipping %s: %v", event.PropertyID, err)
+			continue
+		}
+		nodesToWrite = append(nodesToWrite, wv)
 	}
 
-	instrumentation.Record("OPCUA_SENDING", event.PropertyID, event.Timestamp)
+	if len(nodesToWrite) == 0 {
+		return nil
+	}
 
-	// 5. Send Request
+	req := &ua.WriteRequest{
+		NodesToWrite: nodesToWrite,
+	}
+	for _, event := range events {
+		instrumentation.Record("OPCUA_SENDING", event.PropertyID, event.Timestamp)
+	}
 	resp, err := e.client.Write(ctx, req)
-
-	instrumentation.Record("OPCUA_SENT", event.PropertyID, event.Timestamp)
-
+	for _, event := range events {
+		instrumentation.Record("OPCUA_SENT", event.PropertyID, event.Timestamp)
+	}
 	if err != nil {
 		return err
 	}
-	if len(resp.Results) > 0 && resp.Results[0] != ua.StatusOK {
-		return fmt.Errorf("status: %v", resp.Results[0])
+
+	if len(resp.Results) > 0 {
+		for _, res := range resp.Results {
+			if res != ua.StatusOK {
+				return fmt.Errorf("batch contained errors, first status: %v", res)
+			}
+		}
 	}
 	return nil
 }
