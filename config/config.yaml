@@ -19,8 +19,8 @@ exporters:
     port: 8080
     host: "localhost"
     
-  opcua:
-    type: "opcua"
+  opcua_client:
+    type: "opcua_client"
     enabled: true
     port: 4840
     host: "host.docker.internal"

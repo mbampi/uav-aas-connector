@@ -9,7 +9,7 @@ import (
 	"uav-aas-connector/pkg/exporters/grpc"
 	"uav-aas-connector/pkg/exporters/http"
 	"uav-aas-connector/pkg/exporters/mqtt"
-	"uav-aas-connector/pkg/exporters/opcua"
+	"uav-aas-connector/pkg/exporters/opcua_client"
 )
 
 // OutputExporter is the interface for all "Load" components.
@@ -32,8 +32,8 @@ func NewOutputExporter(cfg config.ExporterConfig, core *core.AASCore) (OutputExp
 	}
 
 	switch cfg.Type {
-	case "opcua":
-		return opcua.NewExporter(cfg, core)
+	case "opcua_client":
+		return opcua_client.NewExporter(cfg, core)
 	case "http":
 		return http.NewExporter(cfg, core)
 	case "mqtt":

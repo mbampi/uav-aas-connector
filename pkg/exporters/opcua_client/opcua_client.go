@@ -1,4 +1,4 @@
-package opcua
+package opcua_client
 
 import (
 	"context"

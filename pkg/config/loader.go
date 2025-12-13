@@ -30,7 +30,7 @@ type AdapterConfig struct {
 
 // ExporterConfig represents the configuration for an output exporter.
 type ExporterConfig struct {
-	Type    string `yaml:"type,omitempty"` // e.g., "opcua", "http"
+	Type    string `yaml:"type,omitempty"` // e.g., "opcua_client", "http"
 	Enabled bool   `yaml:"enabled"`
 	Port    int    `yaml:"port"`
 	Host    string `yaml:"host,omitempty"`
