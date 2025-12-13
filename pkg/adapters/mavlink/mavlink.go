@@ -212,6 +212,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 }
 
 // extractField uses cached reflection indices to get a field's value quickly.
+// It supports array indexing in fieldName, e.g., "Motors[0]".
 func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (any, bool) {
 	rv := reflect.ValueOf(msg)
 	if rv.Kind() == reflect.Ptr {
@@ -223,18 +224,30 @@ func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (an
 		return nil, false
 	}
 
-	// Ensure cache map exists for this type
+	// 1. Parse Field Name and Index (if present)
+	baseName := fieldName
+	arrayIdx := -1
+
+	// Check for bracket syntax like "Field[0]"
+	if left := strings.Index(fieldName, "["); left > 0 && strings.HasSuffix(fieldName, "]") {
+		baseName = fieldName[:left]
+		idxStr := fieldName[left+1 : len(fieldName)-1]
+		if i, err := strconv.Atoi(idxStr); err == nil {
+			arrayIdx = i
+		}
+	}
+
+	// 2. Resolve Base Field via Cache
 	if a.fieldIndexCache[rt] == nil {
 		a.fieldIndexCache[rt] = make(map[string]int)
 	}
 
-	// Check cache for field index
-	idx, ok := a.fieldIndexCache[rt][fieldName]
+	idx, ok := a.fieldIndexCache[rt][baseName]
 	if !ok {
 		// Not cached: Perform linear search to find index
 		found := false
 		for i := 0; i < rt.NumField(); i++ {
-			if rt.Field(i).Name == fieldName {
+			if rt.Field(i).Name == baseName {
 				idx = i
 				found = true
 				break
@@ -244,11 +257,28 @@ func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (an
 			return nil, false
 		}
 		// Store in cache
-		a.fieldIndexCache[rt][fieldName] = idx
+		a.fieldIndexCache[rt][baseName] = idx
+	}
+
+	// 3. Get Field Value
+	fieldVal := rv.Field(idx)
+
+	// 4. Handle Array/Slice Indexing
+	if arrayIdx >= 0 {
+		k := fieldVal.Kind()
+		if k == reflect.Array || k == reflect.Slice {
+			if arrayIdx < fieldVal.Len() {
+				return fieldVal.Index(arrayIdx).Interface(), true
+			}
+			// Index out of bounds
+			return nil, false
+		}
+		// Field is not an array, but index was requested
+		return nil, false
 	}
 
 	// Fast access by index
-	return rv.Field(idx).Interface(), true
+	return fieldVal.Interface(), true
 }
 
 // applyTransform applies scaling.

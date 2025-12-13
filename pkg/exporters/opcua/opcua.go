@@ -48,11 +48,12 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 	ns := uint16(2)
 
 	return &Exporter{
-		client:    c,
-		core:      core,
-		endpoint:  endpoint,
-		namespace: ns,
-		typeCache: make(map[string]aastypes.DataTypeDefXSD),
+		client:      c,
+		core:        core,
+		endpoint:    endpoint,
+		namespace:   ns,
+		typeCache:   make(map[string]aastypes.DataTypeDefXSD),
+		nodeIDCache: make(map[string]*ua.NodeID),
 	}, nil
 }
 
@@ -75,7 +76,7 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			}
 			if event != nil {
 				if err := e.writeToNode(ctx, event); err != nil {
-					log.Printf("[OPCUA Error] %s: %v", event.PropertyID, err)
+					log.Printf("[OPCUA Error] %s (value=%v): %v", event.PropertyID, event.Value, err)
 				}
 			}
 		}
@@ -157,84 +158,208 @@ func (e *Exporter) generateNodeID(submodelID, propertyPath string) *ua.NodeID {
 	return ua.NewStringNodeID(e.namespace, fullPath)
 }
 
-// convertToVariant converts a value to an OPC UA Variant based on the specified AAS data type.
+// convertToVariant converts any value to the specific OPC UA Variant required by the AAS Type.
 func (e *Exporter) convertToVariant(val any, aasType aastypes.DataTypeDefXSD) (*ua.Variant, error) {
-	// Direct type matches
-	switch v := val.(type) {
-	case float64:
-		switch aasType {
-		case aastypes.DataTypeDefXSDDouble:
-			return ua.MustVariant(v), nil
-		case aastypes.DataTypeDefXSDFloat:
-			return ua.MustVariant(float32(v)), nil
-		case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger:
-			return ua.MustVariant(int32(v)), nil
-		case aastypes.DataTypeDefXSDShort:
-			return ua.MustVariant(int16(v)), nil
-		case aastypes.DataTypeDefXSDBoolean:
-			return ua.MustVariant(v != 0), nil
-		}
-	case int64:
-		return ua.MustVariant(int32(v)), nil // OPC UA usually expects Int32
-	case uint64:
-		return ua.MustVariant(uint32(v)), nil
-	case bool:
-		return ua.MustVariant(v), nil
-	case []float64:
-		return ua.MustVariant(v), nil
-	case []float32:
-		return ua.MustVariant(v), nil
-	case []int32:
-		return ua.MustVariant(v), nil
-	case []uint32:
-		return ua.MustVariant(v), nil
-	case []uint16:
-		arr := make([]uint32, len(v))
-		for i, x := range v {
-			arr[i] = uint32(x)
-		}
-		return ua.MustVariant(arr), nil
-	case []int:
-		arr := make([]int32, len(v))
-		for i, x := range v {
-			arr[i] = int32(x)
-		}
-		return ua.MustVariant(arr), nil
-	}
-
-	// Fallback string parsing
-	valStr := fmt.Sprintf("%v", val)
 	switch aasType {
+	// --- Boolean ---
 	case aastypes.DataTypeDefXSDBoolean:
-		v, err := strconv.ParseBool(valStr)
+		v, err := toBool(val)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(v), nil
+
+	// --- Floating Point ---
 	case aastypes.DataTypeDefXSDFloat:
-		v, err := strconv.ParseFloat(valStr, 32)
+		v, err := toFloat64(val)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(float32(v)), nil
 	case aastypes.DataTypeDefXSDDouble:
-		v, err := strconv.ParseFloat(valStr, 64)
+		v, err := toFloat64(val)
 		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(v), nil
-	case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger:
-		v, err := strconv.ParseInt(valStr, 10, 32)
+
+	// --- Signed Integers ---
+	case aastypes.DataTypeDefXSDByte: // SByte (int8)
+		v, err := toInt64(val)
 		if err != nil {
-			if f, err2 := strconv.ParseFloat(valStr, 64); err2 == nil {
-				return ua.MustVariant(int32(f)), nil
-			}
+			return nil, err
+		}
+		return ua.MustVariant(int8(v)), nil
+	case aastypes.DataTypeDefXSDShort: // Int16
+		v, err := toInt64(val)
+		if err != nil {
+			return nil, err
+		}
+		return ua.MustVariant(int16(v)), nil
+	case aastypes.DataTypeDefXSDInt, aastypes.DataTypeDefXSDInteger: // Int32
+		v, err := toInt64(val)
+		if err != nil {
 			return nil, err
 		}
 		return ua.MustVariant(int32(v)), nil
+	case aastypes.DataTypeDefXSDLong: // Int64
+		v, err := toInt64(val)
+		if err != nil {
+			return nil, err
+		}
+		return ua.MustVariant(int64(v)), nil
+
+	// --- Unsigned Integers ---
+	case aastypes.DataTypeDefXSDUnsignedByte: // Byte (uint8)
+		v, err := toUint64(val)
+		if err != nil {
+			return nil, err
+		}
+		return ua.MustVariant(byte(v)), nil
+	case aastypes.DataTypeDefXSDUnsignedShort: // UInt16
+		v, err := toUint64(val)
+		if err != nil {
+			return nil, err
+		}
+		return ua.MustVariant(uint16(v)), nil
+	case aastypes.DataTypeDefXSDUnsignedInt: // UInt32
+		v, err := toUint64(val)
+		if err != nil {
+			return nil, err
+		}
+		return ua.MustVariant(uint32(v)), nil
+	case aastypes.DataTypeDefXSDUnsignedLong: // UInt64
+		v, err := toUint64(val)
+		if err != nil {
+			return nil, err
+		}
+		return ua.MustVariant(uint64(v)), nil
+
+	// --- Strings ---
 	case aastypes.DataTypeDefXSDString:
-		return ua.MustVariant(valStr), nil
+		return ua.MustVariant(fmt.Sprintf("%v", val)), nil
+
 	default:
-		return ua.MustVariant(valStr), nil
+		// Fallback for types we don't strictly enforce yet
+		return ua.MustVariant(val), nil
+	}
+}
+
+// --- Helpers to coerce any numeric type ---
+
+func toInt64(val any) (int64, error) {
+	switch v := val.(type) {
+	case int:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case uint:
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint64:
+		return int64(v), nil
+	case float32:
+		return int64(v), nil
+	case float64:
+		return int64(v), nil
+	case string:
+		return strconv.ParseInt(v, 10, 64)
+	case bool:
+		if v {
+			return 1, nil
+		}
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("cannot convert %T to int64", val)
+	}
+}
+
+func toUint64(val any) (uint64, error) {
+	switch v := val.(type) {
+	case int:
+		return uint64(v), nil
+	case int8:
+		return uint64(v), nil
+	case int16:
+		return uint64(v), nil
+	case int32:
+		return uint64(v), nil
+	case int64:
+		return uint64(v), nil
+	case uint:
+		return uint64(v), nil
+	case uint8:
+		return uint64(v), nil
+	case uint16:
+		return uint64(v), nil
+	case uint32:
+		return uint64(v), nil
+	case uint64:
+		return v, nil
+	case float32:
+		return uint64(v), nil
+	case float64:
+		return uint64(v), nil
+	case string:
+		return strconv.ParseUint(v, 10, 64)
+	case bool:
+		if v {
+			return 1, nil
+		}
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("cannot convert %T to uint64", val)
+	}
+}
+
+func toFloat64(val any) (float64, error) {
+	switch v := val.(type) {
+	case float32:
+		return float64(v), nil
+	case float64:
+		return v, nil
+	case int, int8, int16, int32, int64:
+		i, _ := toInt64(v)
+		return float64(i), nil
+	case uint, uint8, uint16, uint32, uint64:
+		u, _ := toUint64(v)
+		return float64(u), nil
+	case string:
+		return strconv.ParseFloat(v, 64)
+	case bool:
+		if v {
+			return 1.0, nil
+		}
+		return 0.0, nil
+	default:
+		return 0.0, fmt.Errorf("cannot convert %T to float64", val)
+	}
+}
+
+func toBool(val any) (bool, error) {
+	switch v := val.(type) {
+	case bool:
+		return v, nil
+	case int, int8, int16, int32, int64:
+		i, _ := toInt64(v)
+		return i != 0, nil
+	case uint, uint8, uint16, uint32, uint64:
+		u, _ := toUint64(v)
+		return u != 0, nil
+	case string:
+		return strconv.ParseBool(v)
+	default:
+		return false, fmt.Errorf("cannot convert %T to bool", val)
 	}
 }

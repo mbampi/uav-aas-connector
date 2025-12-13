@@ -167,6 +167,7 @@ mappings:
     targetAASSubmodel: "Navigation"
     targetAASCollection: "GPS_Raw"
     targetAASProperty: "HDOP"
+    scale: "0.01" # cm -> m
 
   # --- TerrainData Collection ---
   - sourceMessage: "ALTITUDE"
@@ -301,21 +302,21 @@ mappings:
     targetAASCollection: "ServoOutput"
     targetAASProperty: "Servo4"
 
-  # --- ESC_Status Collection ---
+# --- ESC_Status Collection ---  
   - sourceMessage: "ESC_STATUS"
-    sourceField: "Rpm" # Assumes mapping logic handles array indexing (e.g. index 0)
+    sourceField: "Rpm[0]"       # Selects the first motor's RPM
     targetAASSubmodel: "Actuation"
     targetAASCollection: "ESC_Status"
     targetAASProperty: "RPM"
 
   - sourceMessage: "ESC_STATUS"
-    sourceField: "Voltage"
+    sourceField: "Voltage[0]"   # Selects the first motor's Voltage
     targetAASSubmodel: "Actuation"
     targetAASCollection: "ESC_Status"
     targetAASProperty: "Voltage"
 
   - sourceMessage: "ESC_STATUS"
-    sourceField: "Current"
+    sourceField: "Current[0]"   # Selects the first motor's Current
     targetAASSubmodel: "Actuation"
     targetAASCollection: "ESC_Status"
     targetAASProperty: "Current"
