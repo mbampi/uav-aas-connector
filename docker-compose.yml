@@ -29,7 +29,7 @@ services:
     container_name: metrics-collector
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./metrics_data:/output
+      - ./metrics:/output
     environment:
       - TARGET_CONTAINER=uav-aas-connector
       - DURATION_SEC=660

@@ -29,7 +29,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	latencyPath := path.Join(cfg.Advanced.MetricsPath, "latency.log")
+	strTime := time.Now().Format("20060102_150405")
+	latencyPath := path.Join(cfg.Advanced.MetricsPath, "latency_"+strTime+".log")
 	if err := instrumentation.Init(latencyPath); err != nil {
 		log.Fatalf("Failed to init instrumentation: %v", err)
 	}
@@ -60,6 +61,7 @@ func main() {
 			log.Printf("Failed to create exporter: %v", err)
 			continue
 		}
+		log.Printf("Starting exporter: %s", exporterCfg.Type)
 		go func(exp exporters.OutputExporter) {
 			aasUpdateChan, err := coreInstance.Subscribe(ctx)
 			if err != nil {

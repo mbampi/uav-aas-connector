@@ -33,7 +33,8 @@ except Exception as e:
     print(f"FATAL: Could not connect to Docker Daemon. {e}")
     sys.exit(1)
 
-filename = os.path.join(OUTPUT_DIR, f'metrics_native_{CONTAINER_NAME}.csv')
+strTime = datetime.now().strftime("%Y%m%d_%H%M%S")
+filename = os.path.join(OUTPUT_DIR, f'{CONTAINER_NAME}_{strTime}.csv')
 
 def calculate_cpu_percent(d):
     """Calculates CPU % exactly like 'docker stats'"""
