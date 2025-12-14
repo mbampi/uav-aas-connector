@@ -65,7 +65,7 @@ type MappingEntry struct {
 
 // GetPath constructs the full AAS property path (dot-notation).
 // This keeps the Adapter logic simple and generic.
-func (m MappingEntry) GetPath() string {
+func (m *MappingEntry) GetPath() string {
 	if m.Path != "" {
 		return m.Path
 	}
