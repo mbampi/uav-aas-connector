@@ -21,7 +21,7 @@ exporters:
     
   opcua_client:
     type: "opcua_client"
-    enabled: true
+    enabled: false
     port: 4840
     host: "host.docker.internal"
   
@@ -31,6 +31,12 @@ exporters:
     host: "tcp://localhost:1883" 
     client_id: "uav-connector-01"
     topic_prefix: "aas/uav-1"
+
+  opcua_server:
+    type: "opcua_server"
+    enabled: true
+    port: 4840
+    host: "localhost"
   
 advanced:
   log_level: "debug"

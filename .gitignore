@@ -93,7 +93,9 @@ Temporary Items
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,go,git
 
-
 /experiments
 latency.log
 metrics/
+
+# opcua_server certificates
+pki/ 
