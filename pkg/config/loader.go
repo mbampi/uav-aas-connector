@@ -26,6 +26,7 @@ type AdapterConfig struct {
 	Connection  string `yaml:"connection"`
 	Address     string `yaml:"address"` // can be IP:port for UDP/TCP or device path for serial
 	MappingFile string `yaml:"mappingFile"`
+	Baudrate    int    `yaml:"baudrate,omitempty"` // for serial connections
 }
 
 // ExporterConfig represents the configuration for an output exporter.

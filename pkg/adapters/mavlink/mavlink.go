@@ -59,7 +59,7 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 	case "tcp":
 		endpoint = gomavlib.EndpointTCPServer{Address: cfg.Address}
 	case "serial":
-		endpoint = gomavlib.EndpointSerial{Device: cfg.Address, Baud: 57600}
+		endpoint = gomavlib.EndpointSerial{Device: cfg.Address, Baud: cfg.Baudrate}
 	default:
 		return nil, fmt.Errorf("unsupported mavlink connection type: %s", cfg.Connection)
 	}
@@ -160,6 +160,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 	// Check if we have rules for this message type
 	rules, ok := a.mappingRules[canonical]
 	if !ok {
+		log.Printf("No mapping rules for MAVLink message type: %s", canonical)
 		return // Message ignored
 	}
 

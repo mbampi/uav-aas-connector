@@ -5,9 +5,18 @@ aas:
 
 adapter:
   type: "mavlink"
-  connection: "udp"
-  address: "0.0.0.0:14550"
   mappingFile: "config/mappings/mavlink_ops.yaml"
+  # - UART Connection:
+  connection: "serial"
+  address: "/dev/ttyAMA0"
+  baudrate: 921600
+  # - UDP Connection:
+  # connection: "udp"
+  # address: "0.0.0.0:14550"
+  # - Radio Connection:
+  # connection: "serial"
+  # address: "/dev/ttyUSB0"
+  # baudrate: 57600
 
 exporters:
   dummy:
@@ -21,9 +30,9 @@ exporters:
     
   opcua_client:
     type: "opcua_client"
-    enabled: false
+    enabled: true
     port: 4840
-    host: "host.docker.internal"
+    host: "10.0.0.110"
   
   mqtt_broker:
     type: mqtt
@@ -34,7 +43,7 @@ exporters:
 
   opcua_server:
     type: "opcua_server"
-    enabled: true
+    enabled: false
     port: 4840
     host: "localhost"
   
