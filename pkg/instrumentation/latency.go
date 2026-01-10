@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -18,20 +19,28 @@ var (
 const BufferSize = 10000
 
 // Init opens the latency log file and starts the background writer.
-func Init(filename string) error {
+func Init(metricsDir string) error {
+	// Automatically create the directory if it doesn't exist
+	if err := os.MkdirAll(metricsDir, 0755); err != nil {
+		return fmt.Errorf("could not create dir %s: %w", metricsDir, err)
+	}
+
+	strTime := time.Now().Format("20060102_150405")
+	latencyPath := filepath.Join(metricsDir, "latency_"+strTime+".log")
+
 	var err error
-	logFile, err = os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err = os.OpenFile(latencyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
-
-	// Initialize the buffered channel
-	logChan = make(chan string, BufferSize)
 
 	stat, err := logFile.Stat()
 	if err == nil && stat.Size() == 0 {
 		_, _ = logFile.WriteString("ProcessTimestamp_ns,Stage,PropertyID,TraceID_ns\n")
 	}
+
+	// Initialize the buffered channel
+	logChan = make(chan string, BufferSize)
 
 	// Start the background writer
 	wg.Add(1)

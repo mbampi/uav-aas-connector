@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path"
 	"syscall"
 	"time"
 	"uav-aas-connector/pkg/adapters"
@@ -29,9 +28,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	strTime := time.Now().Format("20060102_150405")
-	latencyPath := path.Join(cfg.Advanced.MetricsPath, "latency_"+strTime+".log")
-	if err := instrumentation.Init(latencyPath); err != nil {
+	if err := instrumentation.Init(cfg.Advanced.MetricsPath); err != nil {
 		log.Fatalf("Failed to init instrumentation: %v", err)
 	}
 	defer instrumentation.Close()
