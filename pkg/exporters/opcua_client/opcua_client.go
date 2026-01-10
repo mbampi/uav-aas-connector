@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
@@ -60,9 +61,23 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 // Start begins processing AAS update events and exporting them to the OPC UA server.
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
 	log.Printf("[OPCUA] Connecting to %s (NS=%d)...", e.endpoint, e.namespace)
-	if err := e.client.Connect(ctx); err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+
+	for {
+		if err := e.client.Connect(ctx); err != nil {
+			log.Printf("[OPCUA] Connection failed: %v. Retrying in 5s...", err)
+
+			// Wait for 5 seconds or until context is done
+			select {
+			case <-ctx.Done():
+				return nil // Context canceled, exit gracefully
+			case <-time.After(5 * time.Second):
+				continue // Retry connection
+			}
+		} else {
+			break // Connection successful
+		}
 	}
+
 	defer e.client.Close(ctx)
 	log.Println("[OPCUA] Connected.")
 
