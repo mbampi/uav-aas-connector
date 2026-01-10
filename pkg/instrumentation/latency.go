@@ -2,7 +2,7 @@ package instrumentation
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -57,7 +57,7 @@ func writer() {
 			// This is the only place we write to the file, so no Mutex needed here
 			_, err := logFile.WriteString(line)
 			if err != nil {
-				fmt.Printf("Error writing to latency log: %v\n", err)
+				slog.Error("Error writing to latency log", "error", err)
 			}
 		}
 	}
@@ -94,9 +94,9 @@ func Record(stage string, propertyID string, traceID time.Time) {
 	// If the buffer is full, we drop the log rather than blocking the system.
 	select {
 	case logChan <- line:
-		// Queued successfully
+	// Queued successfully
 	default:
 		// Buffer full - drop message to preserve system stability (should never happen)
-		log.Printf("Latency log buffer full, dropping log for property %s at stage %s\n", propertyID, stage)
+		slog.Warn("Latency log buffer full, dropping log", "property", propertyID, "stage", stage)
 	}
 }

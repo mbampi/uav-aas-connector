@@ -8,7 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/url"
@@ -81,7 +81,7 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 
 // Start builds the address space and starts the server.
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	log.Printf("[OPCUA Server] Building Address Space...")
+	slog.Info("OPCUA Server building address space")
 
 	if err := e.buildAddressSpace(); err != nil {
 		return fmt.Errorf("failed to build address space: %w", err)
@@ -89,9 +89,9 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 
 	// Start the Server listener in a goroutine
 	go func() {
-		log.Printf("[OPCUA Server] Listening on %s", e.endpoint)
+		slog.Info("OPCUA Server listening", "endpoint", e.endpoint)
 		if err := e.server.ListenAndServe(); err != nil {
-			log.Printf("[OPCUA Server] Server stopped: %v", err)
+			slog.Error("OPCUA Server stopped", "error", err)
 		}
 	}()
 
@@ -111,7 +111,7 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 
 // Stop gracefully shuts down the server.
 func (e *Exporter) Stop() error {
-	log.Println("[OPCUA Server] Stopping...")
+	slog.Info("OPCUA Server stopping")
 	return e.server.Close()
 }
 
@@ -206,7 +206,7 @@ func (e *Exporter) buildAddressSpace() error {
 			)
 
 			if err := nm.AddNode(varNode); err != nil {
-				log.Printf("[OPCUA Server] Failed to add variable node %s: %v", path, err)
+				slog.Error("OPCUA Server failed to add variable node", "path", path, "error", err)
 				continue
 			}
 
@@ -233,13 +233,13 @@ func (e *Exporter) updateNode(event *core.AASUpdateEvent) {
 
 	dt, err := e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
 	if err != nil {
-		log.Printf("[OPCUA Server] Unknown data type for %s: %v", cacheKey, err)
+		slog.Error("OPCUA Server unknown data type", "key", cacheKey, "error", err)
 		return
 	}
 
 	val, err := e.convertValue(event.Value, dt)
 	if err != nil {
-		log.Printf("[OPCUA Server] Conversion error for %s: %v", cacheKey, err)
+		slog.Error("OPCUA Server conversion error", "key", cacheKey, "error", err)
 		return
 	}
 
@@ -386,7 +386,7 @@ func ensurePKI(certFile, keyFile string) error {
 		return fmt.Errorf("failed to create pki dir: %w", err)
 	}
 
-	log.Println("[PKI] Generating new self-signed certificate...")
+	slog.Info("PKI generating new self-signed certificate")
 
 	// 3. Create Private Key
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -440,6 +440,6 @@ func ensurePKI(certFile, keyFile string) error {
 		return err
 	}
 
-	log.Println("[PKI] Certificate generated successfully.")
+	slog.Info("PKI certificate generated successfully")
 	return nil
 }

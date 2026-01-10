@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -48,10 +48,10 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 	// Auto-reconnect ensures reliability during network blips
 	opts.SetAutoReconnect(true)
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		log.Printf("[MQTT] Connected to %s", broker)
+		slog.Info("MQTT connected", "broker", broker)
 	})
 	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
-		log.Printf("[MQTT] Connection lost: %v", err)
+		slog.Error("MQTT connection lost", "error", err)
 	})
 
 	client := mqtt.NewClient(opts)
@@ -71,7 +71,7 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 }
 
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	log.Println("[MQTT] Connecting...")
+	slog.Info("MQTT connecting")
 	if token := e.client.Connect(); token.Wait() && token.Error() != nil {
 		return fmt.Errorf("failed to connect to MQTT broker: %w", token.Error())
 	}
@@ -94,7 +94,7 @@ func (e *Exporter) Stop() error {
 	if e.client != nil && e.client.IsConnected() {
 		// Quiesce for 250ms to allow pending messages to send
 		e.client.Disconnect(250)
-		log.Println("[MQTT] Disconnected")
+		slog.Info("MQTT disconnected")
 	}
 	return nil
 }
@@ -118,7 +118,7 @@ func (e *Exporter) publish(event *core.AASUpdateEvent) {
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("[MQTT] Error marshaling payload: %v", err)
+		slog.Error("MQTT error marshaling payload", "error", err)
 		return
 	}
 
@@ -131,7 +131,7 @@ func (e *Exporter) publish(event *core.AASUpdateEvent) {
 		// WaitWithTimeout prevents infinite blocking if broker hangs
 		if token.WaitTimeout(2 * time.Second) {
 			if token.Error() != nil {
-				log.Printf("[MQTT] Publish failed: %v", token.Error())
+				slog.Error("MQTT publish failed", "error", token.Error())
 			} else {
 				instrumentation.Record("MQTT_SENT", event.PropertyID, event.Timestamp)
 			}

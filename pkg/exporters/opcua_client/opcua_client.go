@@ -3,7 +3,7 @@ package opcua_client
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +36,7 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 	}
 	endpoint := fmt.Sprintf("opc.tcp://%s:%d", host, cfg.Port)
 
-	log.Printf("[OPCUA] Initializing exporter for: %s", endpoint)
+	slog.Info("OPCUA initializing exporter", "endpoint", endpoint)
 
 	c, err := opcua.NewClient(endpoint,
 		opcua.SecurityMode(ua.MessageSecurityModeNone),
@@ -60,11 +60,11 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 
 // Start begins processing AAS update events and exporting them to the OPC UA server.
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	log.Printf("[OPCUA] Connecting to %s (NS=%d)...", e.endpoint, e.namespace)
+	slog.Info("OPCUA connecting", "endpoint", e.endpoint, "ns", e.namespace)
 
 	for {
 		if err := e.client.Connect(ctx); err != nil {
-			log.Printf("[OPCUA] Connection failed: %v. Retrying in 5s...", err)
+			slog.Error("OPCUA connection failed, retrying", "error", err)
 
 			// Wait for 5 seconds or until context is done
 			select {
@@ -79,7 +79,7 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	}
 
 	defer e.client.Close(ctx)
-	log.Println("[OPCUA] Connected.")
+	slog.Info("OPCUA connected", "endpoint", e.endpoint)
 
 	const maxBatchSize = 100
 	batch := make([]*core.AASUpdateEvent, 0, maxBatchSize)
@@ -120,7 +120,7 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			// 3. Send the batch
 			if len(batch) > 0 {
 				if err := e.writeBatch(ctx, batch); err != nil {
-					log.Printf("[OPCUA Error] Batch failed: %v", err)
+					slog.Error("OPCUA batch failed", "error", err)
 				}
 				// Clear buffer, keeping capacity for performance
 				batch = batch[:0]
@@ -183,7 +183,7 @@ func (e *Exporter) writeBatch(ctx context.Context, events []*core.AASUpdateEvent
 	for _, event := range events {
 		wv, err := e.prepareWriteValue(event)
 		if err != nil {
-			log.Printf("[OPCUA Warning] Skipping %s: %v", event.PropertyID, err)
+			slog.Warn("OPCUA skipping property due to error", "property", event.PropertyID, "error", err)
 			continue
 		}
 		nodesToWrite = append(nodesToWrite, wv)

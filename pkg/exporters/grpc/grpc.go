@@ -3,7 +3,7 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"google.golang.org/grpc"
@@ -32,7 +32,7 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 }
 
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	log.Printf("[gRPC] Connecting to %s...", e.host)
+	slog.Info("gRPC connecting", "host", e.host)
 
 	// 1. Dial the Server
 	// Note: For production, use credentials.NewClientTLSFromFile(...)
@@ -50,7 +50,7 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			return nil
 		default:
 			if err := e.runStream(ctx, inChan); err != nil {
-				log.Printf("[gRPC] Stream error: %v. Retrying in 1s...", err)
+				slog.Error("gRPC stream error, retrying", "error", err)
 				time.Sleep(1 * time.Second)
 			}
 		}
@@ -64,7 +64,7 @@ func (e *Exporter) runStream(ctx context.Context, inChan <-chan *core.AASUpdateE
 		return err
 	}
 	e.stream = stream
-	log.Println("[gRPC] Stream established")
+	slog.Info("gRPC stream established")
 
 	for {
 		select {

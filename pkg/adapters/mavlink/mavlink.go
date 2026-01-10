@@ -4,7 +4,7 @@ package mavlink
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"reflect"
 	"strconv"
@@ -41,7 +41,7 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load mavlink mapping file '%s': %w", cfg.MappingFile, err)
 	}
-	log.Printf("Mavlink adapter loaded mapping: %+v ", mappingCfg)
+	slog.Info("Mavlink mapping loaded", "mapping", mappingCfg)
 
 	// Create the mapping rules lookup map.
 	rules := make(map[string][]config.MappingEntry)
@@ -49,7 +49,7 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 		canonicalName := strings.ToUpper(entry.SourceMessage)
 		rules[canonicalName] = append(rules[canonicalName], entry)
 	}
-	log.Printf("Mavlink adapter loaded %d mapping rules", len(rules))
+	slog.Debug("Mavlink mapping rules loaded", "rules", len(rules))
 
 	// Configure the gomavlib endpoint.
 	var endpoint gomavlib.EndpointConf
@@ -105,7 +105,7 @@ func loadMapping(path string) (*config.MappingConfig, error) {
 // Start begins the adapter's work loop.
 func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpdateEvent) error {
 	a.outChan = outChan
-	log.Printf("Starting Mavlink adapter for %s", a.address)
+	slog.Info("Starting Mavlink adapter", "address", a.address)
 
 	for {
 		select {
@@ -120,10 +120,10 @@ func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpda
 				a.handleFrame(e)
 
 			case *gomavlib.EventChannelOpen:
-				log.Printf("Mavlink channel open")
+				slog.Info("Mavlink channel open")
 
 			case *gomavlib.EventChannelClose:
-				log.Printf("Mavlink channel closed")
+				slog.Info("Mavlink channel closed")
 			}
 		}
 	}
@@ -131,7 +131,7 @@ func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpda
 
 // Stop gracefully shuts down the MAVLink node.
 func (a *MavlinkAdapter) Stop() error {
-	log.Println("Stopping Mavlink adapter")
+	slog.Info("Stopping Mavlink adapter")
 	if a.node != nil {
 		a.node.Close()
 	}
@@ -160,7 +160,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 	// Check if we have rules for this message type
 	rules, ok := a.mappingRules[canonical]
 	if !ok {
-		log.Printf("No mapping rules for MAVLink message type: %s", canonical)
+		slog.Info("No mapping rules for MAVLink message type", "type", canonical)
 		return // Message ignored
 	}
 
@@ -190,7 +190,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 		}
 		newValue, err := a.applyTransform(valueToPass, entry.Scale)
 		if err != nil {
-			log.Printf("Warning: transform error for %s: %v", entry.SourceField, err)
+			slog.Warn("Transform error", "field", entry.SourceField, "error", err)
 			continue
 		}
 
@@ -207,7 +207,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 		case a.outChan <- updateEvent:
 			// Success
 		default:
-			log.Printf("Warning: AASUpdateEvent channel full. Discarding update for: %s", updateEvent.PropertyID)
+			slog.Warn("AASUpdateEvent channel full, discarding update", "property", updateEvent.PropertyID)
 		}
 	}
 }

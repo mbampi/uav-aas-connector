@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -40,7 +40,7 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*HttpExporter, 
 // Start begins the HTTP server.
 // The inChan is ignored as this is a "pull" exporter.
 func (h *HttpExporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	log.Printf("HttpExporter starting on port %d", h.cfg.Port)
+	slog.Info("HttpExporter starting", "port", h.cfg.Port)
 
 	mux := http.NewServeMux()
 
@@ -62,11 +62,11 @@ func (h *HttpExporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateE
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		log.Printf("HttpExporter listening on %s", addr)
+		slog.Info("HttpExporter listening", "addr", addr)
 		if err := h.server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("HttpExporter server error: %v", err)
+			slog.Error("HttpExporter server error", "error", err)
 		} else {
-			log.Printf("HttpExporter server shut down gracefully")
+			slog.Info("HttpExporter server shut down gracefully")
 		}
 	}()
 
@@ -74,13 +74,13 @@ func (h *HttpExporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateE
 	go func() {
 		defer h.wg.Done()
 		<-ctx.Done()
-		log.Println("HttpExporter shutting down...")
+		slog.Info("HttpExporter shutting down")
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		if err := h.server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HttpExporter server shutdown error: %v", err)
+			slog.Error("HttpExporter server shutdown error", "error", err)
 		}
 	}()
 
@@ -91,9 +91,9 @@ func (h *HttpExporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateE
 // This is now primarily handled by the context cancellation in Start,
 // but we wait for the goroutines to finish.
 func (h *HttpExporter) Stop() error {
-	log.Println("HttpExporter Stop() called. Waiting for shutdown...")
+	slog.Info("HttpExporter Stop() called. Waiting for shutdown")
 	h.wg.Wait()
-	log.Println("HttpExporter stopped.")
+	slog.Info("HttpExporter stopped")
 	return nil
 }
 
@@ -106,7 +106,7 @@ func (h *HttpExporter) handleGetAllSubmodels(w http.ResponseWriter, r *http.Requ
 	for _, sm := range submodels {
 		jsonable, err := jsonization.ToJsonable(sm)
 		if err != nil {
-			log.Printf("Failed to serialize submodel: %v", err)
+			slog.Error("Failed to serialize submodel", "error", err)
 			continue
 		}
 		response = append(response, jsonable)
@@ -114,7 +114,7 @@ func (h *HttpExporter) handleGetAllSubmodels(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Failed to encode JSON response: %v", err)
+		slog.Error("Failed to encode JSON response", "error", err)
 	}
 }
 
@@ -153,13 +153,13 @@ func (h *HttpExporter) handleGetSubmodelByID(w http.ResponseWriter, r *http.Requ
 	// Serialize using the AAS library
 	jsonable, err := jsonization.ToJsonable(sm)
 	if err != nil {
-		log.Printf("Failed to serialize Submodel '%s': %v", searchID, err)
+		slog.Error("Failed to serialize Submodel", "id", searchID, "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(jsonable); err != nil {
-		log.Printf("Failed to encode JSON response: %v", err)
+		slog.Error("Failed to encode JSON response", "error", err)
 	}
 }

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,14 +22,20 @@ import (
 func main() {
 	cfg, err := config.LoadConfig("config/config.yaml")
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("Failed to load config", "error", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     cfg.Advanced.GetLogLevel(),
+	}))
+	slog.SetDefault(logger)
+
 	if err := instrumentation.Init(cfg.Advanced.MetricsPath); err != nil {
-		log.Fatalf("Failed to init instrumentation: %v", err)
+		slog.Error("Failed to init instrumentation", "error", err)
 	}
 	defer instrumentation.Close()
 
@@ -37,17 +43,19 @@ func main() {
 	rawChan := make(chan *core.AASUpdateEvent, 1000)
 	adapter, err := adapters.NewInputAdapter(cfg.InputAdapter)
 	if err != nil {
-		log.Fatalf("Failed to create adapter: %v", err)
+		slog.Error("Failed to create adapter", "error", err)
+		os.Exit(1)
 	}
 	go func(adpt adapters.InputAdapter) {
 		if err := adpt.Start(ctx, rawChan); err != nil {
-			log.Printf("Adapter error: %v", err)
+			slog.Error("Adapter runtime error", "error", err)
 		}
 	}(adapter)
 
 	coreInstance, err := core.NewAASCore(cfg.AAS)
 	if err != nil {
-		log.Fatalf("Failed to create AAS core: %v", err)
+		slog.Error("Failed to create AAS core", "error", err)
+		os.Exit(1)
 	}
 	go coreInstance.Start(ctx, rawChan)
 
@@ -55,18 +63,18 @@ func main() {
 	for _, exporterCfg := range cfg.OutputExporters {
 		exporter, err := exporters.NewOutputExporter(exporterCfg, coreInstance)
 		if err != nil {
-			log.Printf("Failed to create exporter: %v", err)
+			slog.Error("Failed to create exporter", "error", err, "exporter", exporterCfg.Type)
 			continue
 		}
-		log.Printf("Starting exporter: %s", exporterCfg.Type)
+		slog.Info("Starting exporter", "exporter", exporterCfg.Type)
 		go func(exp exporters.OutputExporter) {
 			aasUpdateChan, err := coreInstance.Subscribe(ctx)
 			if err != nil {
-				log.Printf("Failed to subscribe exporter: %v", err)
+				slog.Error("Failed to subscribe exporter", "error", err, "exporter", exporterCfg.Type)
 				return
 			}
 			if err := exp.Start(ctx, aasUpdateChan); err != nil {
-				log.Printf("Exporter error: %v", err)
+				slog.Error("Exporter runtime error", "error", err, "exporter", exporterCfg.Type)
 			}
 		}(exporter)
 	}
@@ -75,10 +83,10 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
-	log.Println("Shutdown signal received")
+	slog.Info("Shutdown signal received")
 
 	cancel()                    // stop all goroutines
 	time.Sleep(2 * time.Second) // Give some time for goroutines to finish
 
-	log.Println("Shutdown complete")
+	slog.Info("Shutdown complete")
 }

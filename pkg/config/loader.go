@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -45,6 +46,21 @@ type ExporterConfig struct {
 type AdvancedConfig struct {
 	MetricsPath string `yaml:"metrics_path"` // e.g., "/metrics"
 	LogLevel    string `yaml:"log_level"`    // e.g., "debug", "info", "warn", "error"
+}
+
+func (a *AdvancedConfig) GetLogLevel() slog.Level {
+	switch a.LogLevel {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // MappingConfig represents the mapping from data source fields to AAS properties.

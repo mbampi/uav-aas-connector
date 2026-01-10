@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -35,7 +35,7 @@ type AASUpdateEvent struct {
 
 // NewAASCore creates a new AASCore instance.
 func NewAASCore(cfg config.AASConfig) (*AASCore, error) {
-	log.Printf("Loading AAS model from %s", cfg.FilePath)
+	slog.Info("Loading AAS model", "file", cfg.FilePath)
 
 	file, err := os.Open(cfg.FilePath)
 	if err != nil {
@@ -54,7 +54,7 @@ func NewAASCore(cfg config.AASConfig) (*AASCore, error) {
 		return nil, fmt.Errorf("failed to de-serialize AAS model: %w", err)
 	}
 
-	log.Printf("AAS model loaded. Found %d Submodels.", len(env.Submodels()))
+	slog.Info("AAS model loaded", "submodels", len(env.Submodels()))
 
 	return &AASCore{
 		env:         env,
@@ -122,7 +122,7 @@ func (c *AASCore) Start(ctx context.Context, inChan <-chan *AASUpdateEvent) {
 			return
 		case msg, ok := <-inChan:
 			if !ok {
-				log.Println("[AASCore] Input channel closed, stopping.")
+				slog.Info("AASCore input channel closed, stopping")
 				return
 			}
 			if msg == nil {

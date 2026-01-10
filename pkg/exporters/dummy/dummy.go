@@ -2,7 +2,7 @@ package dummy
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
 )
@@ -21,21 +21,21 @@ func NewDummyExporter(cfg config.ExporterConfig) *DummyExporter {
 // It runs until the context is canceled.
 // It receives all processed data from the inChan.
 func (d *DummyExporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	log.Printf("DummyExporter started on port %d", d.cfg.Port)
+	slog.Info("DummyExporter started", "port", d.cfg.Port)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("DummyExporter shutting down")
+			slog.Info("DummyExporter shutting down")
 			return nil
 		case event := <-inChan:
-			log.Printf("DummyExporter received AASUpdateEvent: %+v", event)
+			slog.Info("DummyExporter received AASUpdateEvent", "event", event)
 		}
 	}
 }
 
 // Stop provides a way to gracefully shut down the exporter.
 func (d *DummyExporter) Stop() error {
-	log.Println("DummyExporter stopped")
+	slog.Info("DummyExporter stopped")
 	return nil
 }
