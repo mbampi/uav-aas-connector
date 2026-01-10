@@ -4,6 +4,11 @@ services:
     container_name: uav-aas-connector
     restart: unless-stopped
     
+    devices:
+        - "/dev/ttyUSB0:/dev/ttyUSB0" # Radio
+        - "/dev/ttyAMA0:/dev/ttyAMA0" # UART
+    user: root
+    
     # Mount the local config directory into the container.
     # This allows you to edit mappings/json on your host and 
     # simply restart the container to apply changes.
