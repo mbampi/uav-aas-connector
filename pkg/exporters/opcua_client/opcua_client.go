@@ -70,20 +70,9 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
 	slog.Info("OPCUA connecting", "endpoint", e.endpoint, "ns", e.namespace)
 
-	for {
-		if err := e.client.Connect(ctx); err != nil {
-			slog.Error("OPCUA connection failed, retrying", "error", err)
-
-			// Wait for 5 seconds or until context is done
-			select {
-			case <-ctx.Done():
-				return nil // Context canceled, exit gracefully
-			case <-time.After(5 * time.Second):
-				continue // Retry connection
-			}
-		} else {
-			break // Connection successful
-		}
+	// Initial connection setup using the self-healing reconnect loop
+	if err := e.reconnect(ctx); err != nil {
+		return nil // Context canceled during startup
 	}
 
 	defer e.client.Close(ctx)
@@ -120,12 +109,11 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 						batch = append(batch, event)
 					}
 				default:
-					// Channel is empty. Stop collecting and send what we have.
-					break DrainLoop
+					break DrainLoop // Channel empty, send current batch
 				}
 			}
 
-			// 3. Send the batch
+			// 3. Send the batch (with Circuit Breaker & Recovery)
 			if len(batch) > 0 {
 				// Apply TTL and Deduplication
 				filteredBatch := e.filterBatch(batch)
@@ -133,11 +121,21 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 				// Only send if there are still events left after filtering
 				if len(filteredBatch) > 0 {
 					if err := e.writeBatch(ctx, filteredBatch); err != nil {
-						slog.Error("OPCUA batch failed", "error", err)
+						slog.Error("OPCUA batch failed, triggering session recovery", "error", err)
+
+						// Trigger full reconnection loop
+						if reconnErr := e.reconnect(ctx); reconnErr != nil {
+							return nil // Shutdown requested during retry loop
+						}
+
+						// Post-reconnection retry: write the latest state immediately
+						if err := e.writeBatch(ctx, filteredBatch); err != nil {
+							slog.Error("OPCUA batch retry failed after reconnection, dropping batch", "error", err)
+						}
 					}
 				}
 
-				// Clear buffer, keeping capacity for performance
+				// Clear buffer while retaining allocated slice memory
 				batch = batch[:0]
 			}
 		}
@@ -489,4 +487,41 @@ func (e *Exporter) filterBatch(batch []*core.AASUpdateEvent) []*core.AASUpdateEv
 	}
 
 	return finalBatch
+}
+
+// reconnect cleanly closes broken sessions, flushes server caches, and attempts
+// to re-establish the OPC UA connection with exponential backoff.
+func (e *Exporter) reconnect(ctx context.Context) error {
+	slog.Warn("OPCUA session interrupted, initiating reconnection loop", "endpoint", e.endpoint)
+
+	// 1. Gracefully close dead transport session if open
+	if e.client != nil {
+		_ = e.client.Close(ctx)
+	}
+
+	// 2. Flush cached Node IDs (server restart may invalidate session node references)
+	e.nodeIDCache = make(map[string]*ua.NodeID)
+
+	// 3. Reconnection loop with capped exponential backoff
+	backoff := 1 * time.Second
+	const maxBackoff = 10 * time.Second
+
+	for {
+		if err := e.client.Connect(ctx); err == nil {
+			slog.Info("OPCUA connection successfully restored", "endpoint", e.endpoint)
+			return nil
+		} else {
+			slog.Error("OPCUA reconnection attempt failed", "error", err, "retry_in", backoff)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err() // Graceful exit on application shutdown
+		case <-time.After(backoff):
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
 }
