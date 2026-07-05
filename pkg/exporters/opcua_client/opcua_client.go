@@ -26,6 +26,10 @@ type Exporter struct {
 	namespace   uint16
 	typeCache   map[string]aastypes.DataTypeDefXSD
 	nodeIDCache map[string]*ua.NodeID
+
+	// Resiliency settings
+	enableDedup bool
+	maxAge      time.Duration
 }
 
 // NewExporter creates a new OPC UA exporter instance.
@@ -48,6 +52,8 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 
 	ns := uint16(2)
 
+	maxAge := time.Duration(cfg.MaxAgeSeconds * float64(time.Second))
+
 	return &Exporter{
 		client:      c,
 		core:        core,
@@ -55,6 +61,8 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 		namespace:   ns,
 		typeCache:   make(map[string]aastypes.DataTypeDefXSD),
 		nodeIDCache: make(map[string]*ua.NodeID),
+		enableDedup: cfg.EnableDeduplication,
+		maxAge:      maxAge,
 	}, nil
 }
 
@@ -119,9 +127,16 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 
 			// 3. Send the batch
 			if len(batch) > 0 {
-				if err := e.writeBatch(ctx, batch); err != nil {
-					slog.Error("OPCUA batch failed", "error", err)
+				// Apply TTL and Deduplication
+				filteredBatch := e.filterBatch(batch)
+
+				// Only send if there are still events left after filtering
+				if len(filteredBatch) > 0 {
+					if err := e.writeBatch(ctx, filteredBatch); err != nil {
+						slog.Error("OPCUA batch failed", "error", err)
+					}
 				}
+
 				// Clear buffer, keeping capacity for performance
 				batch = batch[:0]
 			}
@@ -430,4 +445,48 @@ func toBool(val any) (bool, error) {
 	default:
 		return false, fmt.Errorf("cannot convert %T to bool", val)
 	}
+}
+
+// filterBatch applies TTL and Deduplication to a batch of events before transmission.
+func (e *Exporter) filterBatch(batch []*core.AASUpdateEvent) []*core.AASUpdateEvent {
+	// Fast path: return immediately if both features are disabled
+	if !e.enableDedup && e.maxAge <= 0 {
+		return batch
+	}
+
+	now := time.Now()
+	var finalBatch []*core.AASUpdateEvent
+
+	if e.enableDedup {
+		// Deduplication enabled: Use a map to retain only the latest event per property
+		latestUpdates := make(map[string]*core.AASUpdateEvent)
+
+		for _, event := range batch {
+			// TTL Check: Drop stale messages
+			if e.maxAge > 0 && now.Sub(event.Timestamp) > e.maxAge {
+				continue
+			}
+
+			// Map key guarantees older events for the same property are overwritten
+			cacheKey := event.SubmodelID + "." + event.PropertyID
+			latestUpdates[cacheKey] = event
+		}
+
+		// Re-flatten the map into a slice
+		finalBatch = make([]*core.AASUpdateEvent, 0, len(latestUpdates))
+		for _, event := range latestUpdates {
+			finalBatch = append(finalBatch, event)
+		}
+	} else {
+		// Deduplication disabled, only process TTL
+		finalBatch = make([]*core.AASUpdateEvent, 0, len(batch))
+		for _, event := range batch {
+			if e.maxAge > 0 && now.Sub(event.Timestamp) > e.maxAge {
+				continue
+			}
+			finalBatch = append(finalBatch, event)
+		}
+	}
+
+	return finalBatch
 }

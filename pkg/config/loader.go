@@ -40,6 +40,10 @@ type ExporterConfig struct {
 	// MQTT specific
 	ClientID    string `yaml:"clientID,omitempty"`
 	TopicPrefix string `yaml:"topicPrefix,omitempty"`
+
+	// Performance and Resiliency Flags
+	EnableDeduplication bool    `yaml:"enableDeduplication,omitempty"` // Keeps only the latest value per property in a batch
+	MaxAgeSeconds       float64 `yaml:"maxAgeSeconds,omitempty"`       // Drops messages older than this (0 means disabled)
 }
 
 // AdvancedConfig represents advanced configuration options.
