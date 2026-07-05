@@ -7,16 +7,16 @@ adapter:
   type: "mavlink"
   mappingFile: "config/mappings/mavlink_ops.yaml"
   # - UART Connection:
-  connection: "serial"
-  address: "/dev/ttyAMA0"
-  baudrate: 921600
+  # connection: "serial"
+  # address: "/dev/ttyAMA0"
+  # baudrate: 921600
   # - UDP Connection:
   # connection: "udp"
   # address: "0.0.0.0:14550"
   # - Radio Connection:
-  # connection: "serial"
-  # address: "/dev/ttyUSB0"
-  # baudrate: 57600
+  connection: "serial"
+  address: "/dev/ttyUSB0"
+  baudrate: 57600
 
 exporters:
   dummy:
@@ -31,8 +31,8 @@ exporters:
   opcua_client:
     type: "opcua_client"
     enabled: true
-    port: 4840
-    host: "10.0.0.110"
+    port: 4841
+    host: "10.0.0.110" # 0.0.0.0 for local testing
   
   mqtt_broker:
     type: mqtt
@@ -48,5 +48,5 @@ exporters:
     host: "localhost"
   
 advanced:
-  log_level: "debug"
+  log_level: "info"
   metrics_path: "metrics/"

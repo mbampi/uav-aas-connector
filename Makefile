@@ -1,8 +1,8 @@
 # --- Configuration ---
 PI_USER := pi
 PI_HOST := raspberrypi.local
-PI_RESOURCES_METRICS := ~/uav-aas-connector/pi_metrics
-PI_LATENCY_METRICS := ~/uav-aas-connector/pi_metrics
+PI_RESOURCES_METRICS := ~/uav-aas-connector/metrics
+PI_LATENCY_METRICS := ~/uav-aas-connector/metrics
 LOCAL_PATH  := ./metrics_received
 
 # SSH Target (combines user and host)

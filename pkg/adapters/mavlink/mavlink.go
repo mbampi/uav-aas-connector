@@ -160,7 +160,7 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 	// Check if we have rules for this message type
 	rules, ok := a.mappingRules[canonical]
 	if !ok {
-		slog.Info("No mapping rules for MAVLink message type", "type", canonical)
+		slog.Debug("No mapping rules for MAVLink message type", "type", canonical)
 		return // Message ignored
 	}
 

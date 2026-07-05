@@ -1,0 +1,12 @@
+# config/mappings/mavlink_one.yaml
+#
+# This file maps incoming MAVLink message fields to their target properties 
+# in the improved AAS (Asset Administration Shell).
+
+mappings:
+  - sourceMessage: "GLOBAL_POSITION_INT"
+    sourceField: "Lat"
+    targetAASSubmodel: "Navigation"
+    targetAASCollection: "GlobalPosition"
+    targetAASProperty: "Latitude"
+    scale: "1e-7"
