@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"uav-aas-connector/pkg/config"
@@ -30,6 +31,11 @@ type Exporter struct {
 	// Resiliency settings
 	enableDedup bool
 	maxAge      time.Duration
+
+	// Decoupling components
+	pendingUpdates map[string]*core.AASUpdateEvent
+	pendingMu      sync.Mutex
+	triggerChan    chan struct{} // Used to wake up the network worker instantly
 }
 
 // NewExporter creates a new OPC UA exporter instance.
@@ -55,88 +61,55 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 	maxAge := time.Duration(cfg.MaxAgeSeconds * float64(time.Second))
 
 	return &Exporter{
-		client:      c,
-		core:        core,
-		endpoint:    endpoint,
-		namespace:   ns,
-		typeCache:   make(map[string]aastypes.DataTypeDefXSD),
-		nodeIDCache: make(map[string]*ua.NodeID),
-		enableDedup: cfg.EnableDeduplication,
-		maxAge:      maxAge,
+		client:         c,
+		core:           core,
+		endpoint:       endpoint,
+		namespace:      ns,
+		typeCache:      make(map[string]aastypes.DataTypeDefXSD),
+		nodeIDCache:    make(map[string]*ua.NodeID),
+		enableDedup:    cfg.EnableDeduplication,
+		maxAge:         maxAge,
+		pendingUpdates: make(map[string]*core.AASUpdateEvent),
+		triggerChan:    make(chan struct{}, 1), // Buffer of 1 ensures non-blocking triggers
 	}, nil
 }
 
-// Start begins processing AAS update events and exporting them to the OPC UA server.
+// Start begins the lightning-fast ingestion loop and spawns the network worker.
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
 	slog.Info("OPCUA connecting", "endpoint", e.endpoint, "ns", e.namespace)
 
-	// Initial connection setup using the self-healing reconnect loop
 	if err := e.reconnect(ctx); err != nil {
-		return nil // Context canceled during startup
+		return nil
 	}
-
 	defer e.client.Close(ctx)
-	slog.Info("OPCUA connected", "endpoint", e.endpoint)
 
-	const maxBatchSize = 100
-	batch := make([]*core.AASUpdateEvent, 0, maxBatchSize)
+	// Spawn the decoupled network worker
+	go e.networkWorker(ctx)
 
+	// Main Ingestion Loop (Never Blocks)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-
-		// 1. Block waiting for at least one event
-		case firstEvent, ok := <-inChan:
+		case event, ok := <-inChan:
 			if !ok {
 				return nil
 			}
-			if firstEvent != nil {
-				batch = append(batch, firstEvent)
+			if event == nil {
+				continue
 			}
 
-			// 2. Opportunistic Loop: Drain the channel efficiently
-			// If 50 items are waiting, we grab them ALL instantly.
-			// If 0 items are waiting, the 'default' case fires and we send immediately.
-		DrainLoop:
-			for len(batch) < maxBatchSize {
-				select {
-				case event, ok := <-inChan:
-					if !ok {
-						break DrainLoop // Channel closed
-					}
-					if event != nil {
-						batch = append(batch, event)
-					}
-				default:
-					break DrainLoop // Channel empty, send current batch
-				}
-			}
+			// 1. Thread-safely update the pending state
+			e.pendingMu.Lock()
+			cacheKey := event.SubmodelID + "." + event.PropertyID
+			e.pendingUpdates[cacheKey] = event
+			e.pendingMu.Unlock()
 
-			// 3. Send the batch (with Circuit Breaker & Recovery)
-			if len(batch) > 0 {
-				// Apply TTL and Deduplication
-				filteredBatch := e.filterBatch(batch)
-
-				// Only send if there are still events left after filtering
-				if len(filteredBatch) > 0 {
-					if err := e.writeBatch(ctx, filteredBatch); err != nil {
-						slog.Error("OPCUA batch failed, triggering session recovery", "error", err)
-
-						// Trigger full reconnection loop
-						if reconnErr := e.reconnect(ctx); reconnErr != nil {
-							return nil // Shutdown requested during retry loop
-						}
-
-						// Post-reconnection retry: write the latest state immediately
-						if err := e.writeBatch(ctx, filteredBatch); err != nil {
-							slog.Error("OPCUA batch retry failed after reconnection, dropping batch", "error", err)
-						}
-					}
-				}
-
-				// Clear buffer while retaining allocated slice memory
-				batch = batch[:0]
+			// 2. Wake up the network worker instantly (non-blocking)
+			select {
+			case e.triggerChan <- struct{}{}:
+			default:
+				// Worker is already awake and processing, no need to block
 			}
 		}
 	}
@@ -148,6 +121,54 @@ func (e *Exporter) Stop() error {
 		return e.client.Close(context.Background())
 	}
 	return nil
+}
+
+// networkWorker handles OPC UA writes. It protects the ingestion loop from network latency.
+func (e *Exporter) networkWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-e.triggerChan: // Wakes up instantly when new data arrives
+			// 1. Extract and clear the pending state as fast as possible
+			e.pendingMu.Lock()
+
+			// If map is empty, skip
+			if len(e.pendingUpdates) == 0 {
+				e.pendingMu.Unlock()
+				continue
+			}
+
+			// Pre-allocate slice for speed
+			batch := make([]*core.AASUpdateEvent, 0, len(e.pendingUpdates))
+			for _, event := range e.pendingUpdates {
+				batch = append(batch, event)
+			}
+
+			// Clear the map for the next cycle
+			e.pendingUpdates = make(map[string]*core.AASUpdateEvent)
+			e.pendingMu.Unlock()
+
+			// 2. Apply TTL (Deduplication is already handled implicitly by the map!)
+			filteredBatch := e.filterBatch(batch)
+
+			// 3. Send over the network
+			if len(filteredBatch) > 0 {
+				if err := e.writeBatch(ctx, filteredBatch); err != nil {
+					slog.Error("OPCUA batch failed, triggering session recovery", "error", err)
+
+					if reconnErr := e.reconnect(ctx); reconnErr != nil {
+						return
+					}
+
+					// Retry after reconnect
+					if err := e.writeBatch(ctx, filteredBatch); err != nil {
+						slog.Error("OPCUA batch retry failed, dropping batch", "error", err)
+					}
+				}
+			}
+		}
+	}
 }
 
 // prepareWriteValue creates the OPC UA write structure but does not send it.
