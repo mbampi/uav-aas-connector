@@ -146,7 +146,9 @@ func (e *Exporter) networkWorker(ctx context.Context) {
 			}
 
 			// Clear the map for the next cycle
-			e.pendingUpdates = make(map[string]*core.AASUpdateEvent)
+			for k := range e.pendingUpdates {
+				delete(e.pendingUpdates, k)
+			}
 			e.pendingMu.Unlock()
 
 			// 2. Apply TTL (Deduplication is already handled implicitly by the map!)
