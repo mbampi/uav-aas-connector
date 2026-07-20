@@ -1,6 +1,7 @@
 package mavlink
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -39,43 +40,60 @@ func TestGoTypeToMavName(t *testing.T) {
 
 func TestApplyTransform(t *testing.T) {
 	a := &MavlinkAdapter{}
-	_, err := a.applyTransform(float64(10), "2")
+
+	// Test with scale (hasScale = true)
+	resScaled, err := a.applyTransform(float64(10), 2.0, true)
 	assert.NoError(t, err)
+	assert.Equal(t, float64(20.0), resScaled)
+
+	// Test without scale (hasScale = false)
+	resUnscaled, err := a.applyTransform(float64(10), 0.0, false)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(10), resUnscaled)
 }
 
 // TestHandleFrame_Integration verifies the logic from extracting a field
 // to generating an AAS event.
 func TestHandleFrame_Integration(t *testing.T) {
-	// 1. Setup Manual Configuration (Skip loading file)
-	mappings := []config.MappingEntry{
+	// Setup Manual Configuration (Skip loading file)
+	// Manually populate rules map
+	rules := make(map[string][]mavlinkRule)
+
+	rules["FAKE_MESSAGE"] = []mavlinkRule{
 		{
-			SourceMessage:     "FAKE_MESSAGE",
-			SourceField:       "ValInt",
-			TargetAASSubmodel: "TestSubmodel",
-			TargetAASProperty: "TestPropertyInt",
-			Scale:             "", // No scale
+			MappingEntry: config.MappingEntry{
+				SourceMessage:     "FAKE_MESSAGE",
+				SourceField:       "ValInt",
+				TargetAASSubmodel: "TestSubmodel",
+				TargetAASProperty: "TestPropertyInt",
+				Scale:             "",
+			},
+			hasScale: false,
+			fullPath: "TestPropertyInt", // Pre-calculated path
 		},
 		{
-			SourceMessage:     "FAKE_MESSAGE",
-			SourceField:       "ValFloat",
-			TargetAASSubmodel: "TestSubmodel",
-			TargetAASProperty: "TestPropertyScaled",
-			Scale:             "10.0", // Apply Scale
+			MappingEntry: config.MappingEntry{
+				SourceMessage:     "FAKE_MESSAGE",
+				SourceField:       "ValFloat",
+				TargetAASSubmodel: "TestSubmodel",
+				TargetAASProperty: "TestPropertyScaled",
+				Scale:             "10.0",
+			},
+			parsedScale: 10.0,
+			hasScale:    true,
+			fullPath:    "TestPropertyScaled", // Pre-calculated path
 		},
 	}
-
-	// Manually populate rules map
-	rules := make(map[string][]config.MappingEntry)
-	rules["FAKE_MESSAGE"] = mappings
 
 	outChan := make(chan *core.AASUpdateEvent, 5)
-
 	adapter := &MavlinkAdapter{
-		mappingRules: rules,
-		outChan:      outChan,
+		mappingRules:    rules,
+		outChan:         outChan,
+		typeNameCache:   make(map[reflect.Type]string),
+		fieldIndexCache: make(map[reflect.Type]map[string]int),
 	}
 
-	// 2. Create a Dummy Frame containing our FakeMessage
+	// Create a Dummy Frame containing our FakeMessage
 	fakeMsg := &FakeMessage{
 		ValInt:   100,
 		ValFloat: 1.5,
@@ -98,10 +116,10 @@ func TestHandleFrame_Integration(t *testing.T) {
 		Frame: frm,
 	}
 
-	// 3. Execute Logic
+	// Execute Logic
 	adapter.handleFrame(evt)
 
-	// 4. Assert Results
+	// Assert Results
 	// We expect 2 events (one for Int, one for Float)
 
 	timeout := time.After(1 * time.Second)
@@ -114,11 +132,9 @@ func TestHandleFrame_Integration(t *testing.T) {
 			switch e.PropertyID {
 			case "TestPropertyInt":
 				assert.Equal(t, "TestSubmodel", e.SubmodelID)
-				assert.Equal(t, int32(100), e.Value) // No scale, original type/value preserved?
-				// Wait, applyTransform returns original if no scale.
+				assert.Equal(t, int64(100), e.Value)
 			case "TestPropertyScaled":
 				assert.Equal(t, "TestSubmodel", e.SubmodelID)
-				// 1.5 * 10.0 = 15.0
 				assert.Equal(t, float64(15.0), e.Value)
 			default:
 				t.Errorf("Unexpected property ID: %s", e.PropertyID)
@@ -133,8 +149,10 @@ func TestHandleFrame_Integration(t *testing.T) {
 func TestHandleFrame_UnknownMessage(t *testing.T) {
 	outChan := make(chan *core.AASUpdateEvent, 1)
 	adapter := &MavlinkAdapter{
-		mappingRules: make(map[string][]config.MappingEntry), // Empty rules
-		outChan:      outChan,
+		mappingRules:    make(map[string][]mavlinkRule),
+		outChan:         outChan,
+		typeNameCache:   make(map[reflect.Type]string),
+		fieldIndexCache: make(map[reflect.Type]map[string]int),
 	}
 
 	fakeMsg := &FakeMessage{ValInt: 1}
