@@ -39,7 +39,7 @@ type Exporter struct {
 }
 
 // NewExporter creates a new OPC UA exporter instance.
-func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, error) {
+func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, error) {
 	host := "localhost"
 	if cfg.Host != "" {
 		host = cfg.Host
@@ -62,7 +62,7 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*Exporter, erro
 
 	return &Exporter{
 		client:         c,
-		core:           core,
+		core:           aasCore,
 		endpoint:       endpoint,
 		namespace:      ns,
 		typeCache:      make(map[string]aastypes.DataTypeDefXSD),
