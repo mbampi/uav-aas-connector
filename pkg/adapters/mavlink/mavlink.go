@@ -28,11 +28,20 @@ type MavlinkAdapter struct {
 	outChan chan<- *core.AASUpdateEvent
 
 	// mappingRules holds the loaded transformation logic.
-	mappingRules map[string][]config.MappingEntry
+	mappingRules map[string][]mavlinkRule
 
 	// Caches to optimize reflection performance (O(1) lookups)
 	typeNameCache   map[reflect.Type]string
 	fieldIndexCache map[reflect.Type]map[string]int
+}
+
+// mavlinkRule extends the base configuration with pre-parsed fields
+// to guarantee zero-allocation, O(1) performance in the hot path.
+type mavlinkRule struct {
+	config.MappingEntry
+	parsedScale float64
+	hasScale    bool
+	fullPath    string
 }
 
 // NewAdapter creates a new MavlinkAdapter.
@@ -44,10 +53,25 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 	slog.Info("Mavlink mapping loaded", "mapping", mappingCfg)
 
 	// Create the mapping rules lookup map.
-	rules := make(map[string][]config.MappingEntry)
+	rules := make(map[string][]mavlinkRule)
 	for _, entry := range mappingCfg.Mappings {
 		canonicalName := strings.ToUpper(entry.SourceMessage)
-		rules[canonicalName] = append(rules[canonicalName], entry)
+
+		rule := mavlinkRule{
+			MappingEntry: entry,
+			fullPath:     entry.GetPath(), // Pre-calculate the full AAS path
+		}
+
+		if entry.Scale != "" {
+			scale, err := strconv.ParseFloat(entry.Scale, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid scale '%s' in mapping for %s: %w", entry.Scale, entry.SourceField, err)
+			}
+			rule.parsedScale = scale
+			rule.hasScale = true
+		}
+
+		rules[canonicalName] = append(rules[canonicalName], rule)
 	}
 	slog.Debug("Mavlink mapping rules loaded", "rules", len(rules))
 
@@ -167,15 +191,14 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 	ts := time.Now().UTC()
 
 	// Iterate through all rules for this message
-	for _, entry := range rules {
+	for _, rule := range rules {
 		// Extract field using cached index lookup
-		rawValue, ok := a.extractField(msg, entry.SourceField)
+		rawValue, ok := a.extractField(msg, rule.SourceField)
 		if !ok {
 			continue
 		}
 
 		var valueToPass any = rawValue
-
 		rv := reflect.ValueOf(rawValue)
 		if rv.IsValid() {
 			k := rv.Kind()
@@ -188,15 +211,17 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 				valueToPass = rv.Uint() // Standardizes to uint64
 			}
 		}
-		newValue, err := a.applyTransform(valueToPass, entry.Scale)
+
+		// Use the pre-parsed scale and boolean flag
+		newValue, err := a.applyTransform(valueToPass, rule.parsedScale, rule.hasScale)
 		if err != nil {
-			slog.Warn("Transform error", "field", entry.SourceField, "error", err)
+			slog.Warn("Transform error", "field", rule.SourceField, "error", err)
 			continue
 		}
 
 		updateEvent := &core.AASUpdateEvent{
-			SubmodelID: entry.TargetAASSubmodel,
-			PropertyID: entry.GetPath(),
+			SubmodelID: rule.TargetAASSubmodel,
+			PropertyID: rule.fullPath, // Use the pre-calculated path
 			Value:      newValue,
 			Timestamp:  ts,
 		}
@@ -282,15 +307,10 @@ func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (an
 	return fieldVal.Interface(), true
 }
 
-// applyTransform applies scaling.
-func (a *MavlinkAdapter) applyTransform(value any, scaleStr string) (any, error) {
-	if scaleStr == "" {
+// applyTransform applies scaling using pre-parsed values.
+func (a *MavlinkAdapter) applyTransform(value any, scale float64, hasScale bool) (any, error) {
+	if !hasScale {
 		return value, nil
-	}
-
-	scale, err := strconv.ParseFloat(scaleStr, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid scale value '%s': %w", scaleStr, err)
 	}
 
 	switch v := value.(type) {
