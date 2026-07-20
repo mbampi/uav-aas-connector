@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"time"
 	"uav-aas-connector/pkg/config"
@@ -22,6 +21,9 @@ type AASCore struct {
 	env         aastypes.IEnvironment
 	modelMutex  sync.RWMutex
 	subscribers []chan *AASUpdateEvent
+
+	// flat routing map for O(1) property lookups
+	propertyMap map[string]aastypes.IProperty
 }
 
 // AASUpdateEvent is the "push" notification from the core.
@@ -55,10 +57,10 @@ func NewAASCore(cfg config.AASConfig) (*AASCore, error) {
 	}
 
 	slog.Info("AAS model loaded", "submodels", len(env.Submodels()))
-
 	return &AASCore{
 		env:         env,
 		subscribers: make([]chan *AASUpdateEvent, 0),
+		propertyMap: buildPropertyMap(env),
 	}, nil
 }
 
@@ -97,18 +99,14 @@ func (c *AASCore) GetSubmodelByID(id string) (aastypes.ISubmodel, error) {
 
 // GetElementDataType looks up the data type defined in the AAS JSON for a specific path.
 func (c *AASCore) GetElementDataType(submodelIdShort, propertyIdPath string) (aastypes.DataTypeDefXSD, error) {
+	cacheKey := submodelIdShort + "." + propertyIdPath
+
 	c.modelMutex.RLock()
-	defer c.modelMutex.RUnlock()
+	prop, exists := c.propertyMap[cacheKey]
+	c.modelMutex.RUnlock()
 
-	sm := findSubmodel(c.env, submodelIdShort)
-	if sm == nil {
-		return 0, fmt.Errorf("submodel '%s' not found", submodelIdShort)
-	}
-
-	path := strings.Split(propertyIdPath, ".")
-	prop, err := findProperty(sm.SubmodelElements(), path)
-	if err != nil {
-		return 0, err
+	if !exists {
+		return 0, fmt.Errorf("property path '%s' not found in submodel '%s'", propertyIdPath, submodelIdShort)
 	}
 
 	return prop.ValueType(), nil
@@ -160,31 +158,27 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 
 // updateModel updates the model with new data and notifies subscribers.
 func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any, timestamp time.Time) {
-	c.modelMutex.Lock()
-	// T1: Record core processing time
-	// We use the incoming 'timestamp' (T0) as the TraceID
-	instrumentation.Record("CORE", propertyIdPath, timestamp)
-	defer c.modelMutex.Unlock()
+	cacheKey := submodelIdShort + "." + propertyIdPath
 
-	sm := findSubmodel(c.env, submodelIdShort)
-	if sm == nil {
-		return
-	}
+	// 1. Fast O(1) Lookup (Read Lock)
+	c.modelMutex.RLock()
+	prop, exists := c.propertyMap[cacheKey]
+	c.modelMutex.RUnlock()
 
-	path := strings.Split(propertyIdPath, ".")
-	prop, err := findProperty(sm.SubmodelElements(), path)
-	if err != nil {
+	if !exists {
 		return // Property not found in model
 	}
 
-	// Update the in-memory AAS Model.
-	// The library strictly requires a *string, so we must format it here.
-	if p, ok := prop.(*aastypes.Property); ok {
-		strValue := fmt.Sprintf("%v", value)
-		p.SetValue(&strValue)
-	}
+	// 2. Format string outside of the lock to prevent blocking concurrent updates
+	strValue := fmt.Sprintf("%v", value)
 
-	// Broadcast the event to Exporters.
+	// 3. Narrow Write Lock (Only for setting the state)
+	c.modelMutex.Lock()
+	instrumentation.Record("CORE", propertyIdPath, timestamp)
+	prop.SetValue(&strValue)
+	c.modelMutex.Unlock()
+
+	// 4. Prepare Event
 	updateEvent := &AASUpdateEvent{
 		SubmodelID: submodelIdShort,
 		PropertyID: propertyIdPath,
@@ -192,10 +186,14 @@ func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any,
 		Timestamp:  timestamp,
 	}
 
+	// 5. Broadcast (Read Lock only protects the subscribers slice)
+	c.modelMutex.RLock()
+	defer c.modelMutex.RUnlock()
 	for _, subChan := range c.subscribers {
 		select {
 		case subChan <- updateEvent:
 		default:
+			// Allows fast exporters to proceed even if one exporter is clogged
 		}
 	}
 }

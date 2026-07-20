@@ -62,3 +62,43 @@ func findProperty(elements []aastypes.ISubmodelElement, path []string) (aastypes
 
 	return nil, fmt.Errorf("element '%s' is not a Collection", currentIDShort)
 }
+
+// buildPropertyMap creates a flattened, O(1) lookup map of all properties.
+func buildPropertyMap(env aastypes.IEnvironment) map[string]aastypes.IProperty {
+	m := make(map[string]aastypes.IProperty)
+	if env.Submodels() == nil {
+		return m
+	}
+
+	for _, sm := range env.Submodels() {
+		if sm.IDShort() == nil {
+			continue
+		}
+		smID := *sm.IDShort()
+		flattenProperties(m, sm.SubmodelElements(), smID, "")
+	}
+	return m
+}
+
+// flattenProperties recursively flattens the submodel elements into a map for O(1) lookups.
+func flattenProperties(m map[string]aastypes.IProperty, elements []aastypes.ISubmodelElement, smID string, prefix string) {
+	for _, el := range elements {
+		if el.IDShort() == nil {
+			continue
+		}
+
+		name := *el.IDShort()
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+
+		fullKey := smID + "." + path
+
+		if prop, ok := el.(aastypes.IProperty); ok {
+			m[fullKey] = prop
+		} else if coll, ok := el.(aastypes.ISubmodelElementCollection); ok {
+			flattenProperties(m, coll.Value(), smID, path)
+		}
+	}
+}
