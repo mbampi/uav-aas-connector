@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 	"uav-aas-connector/pkg/config"
@@ -160,7 +161,7 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any, timestamp time.Time) {
 	cacheKey := submodelIdShort + "." + propertyIdPath
 
-	// 1. Fast O(1) Lookup (Read Lock)
+	// Fast O(1) Lookup (Read Lock)
 	c.modelMutex.RLock()
 	prop, exists := c.propertyMap[cacheKey]
 	c.modelMutex.RUnlock()
@@ -169,16 +170,13 @@ func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any,
 		return // Property not found in model
 	}
 
-	// 2. Format string outside of the lock to prevent blocking concurrent updates
-	strValue := fmt.Sprintf("%v", value)
+	strValue := fastAnyToString(value)
 
-	// 3. Narrow Write Lock (Only for setting the state)
 	c.modelMutex.Lock()
 	instrumentation.Record("CORE", propertyIdPath, timestamp)
 	prop.SetValue(&strValue)
 	c.modelMutex.Unlock()
 
-	// 4. Prepare Event
 	updateEvent := &AASUpdateEvent{
 		SubmodelID: submodelIdShort,
 		PropertyID: propertyIdPath,
@@ -186,7 +184,7 @@ func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any,
 		Timestamp:  timestamp,
 	}
 
-	// 5. Broadcast (Read Lock only protects the subscribers slice)
+	// Broadcast (Read Lock only protects the subscribers slice)
 	c.modelMutex.RLock()
 	defer c.modelMutex.RUnlock()
 	for _, subChan := range c.subscribers {
@@ -195,5 +193,34 @@ func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any,
 		default:
 			// Allows fast exporters to proceed even if one exporter is clogged
 		}
+	}
+}
+
+// fastAnyToString provides zero-reflection, low-allocation string conversion
+// for the high-frequency ingestion path.
+func fastAnyToString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		// 'f' formats without exponents, -1 yields the minimum necessary digits
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(v)
+	case int32:
+		return strconv.FormatInt(int64(v), 10)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10)
+	case uint64:
+		return strconv.FormatUint(v, 10)
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		// Fallback for unexpected types (incurs standard reflection overhead)
+		return fmt.Sprintf("%v", v)
 	}
 }
