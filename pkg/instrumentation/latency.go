@@ -9,9 +9,17 @@ import (
 	"time"
 )
 
+// logEntry represents a single latency log entry.
+type logEntry struct {
+	Timestamp_ns int64
+	Stage        string
+	PropertyID   string
+	TraceID_ns   int64
+}
+
 var (
 	logFile *os.File
-	logChan chan string    // Buffer for log lines
+	logChan chan logEntry  // Buffer for asynchronous logging
 	wg      sync.WaitGroup // To ensure logs are flushed on shutdown
 )
 
@@ -39,8 +47,8 @@ func Init(metricsDir string) error {
 		_, _ = logFile.WriteString("ProcessTimestamp_ns,Stage,PropertyID,TraceID_ns\n")
 	}
 
-	// Initialize the buffered channel
-	logChan = make(chan string, BufferSize)
+	// 3. Initialize the typed channel
+	logChan = make(chan logEntry, BufferSize)
 
 	// Start the background writer
 	wg.Add(1)
@@ -52,9 +60,10 @@ func Init(metricsDir string) error {
 // writer is the background worker that handles file I/O.
 func writer() {
 	defer wg.Done()
-	for line := range logChan {
+	// Format the string only when writing to the file, offloading the CPU/GC cost
+	for entry := range logChan {
 		if logFile != nil {
-			// This is the only place we write to the file, so no Mutex needed here
+			line := fmt.Sprintf("%d,%s,%s,%d\n", entry.Timestamp_ns, entry.Stage, entry.PropertyID, entry.TraceID_ns)
 			_, err := logFile.WriteString(line)
 			if err != nil {
 				slog.Error("Error writing to latency log", "error", err)
@@ -87,14 +96,16 @@ func Record(stage string, propertyID string, traceID time.Time) {
 	now := time.Now().UnixNano()
 	trace := traceID.UnixNano()
 
-	// Format string immediately to capture correct 'now' timestamp
-	line := fmt.Sprintf("%d,%s,%s,%d\n", now, stage, propertyID, trace)
+	// Create a stack-allocated struct (Zero GC overhead)
+	entry := logEntry{
+		Timestamp_ns: now,
+		Stage:        stage,
+		PropertyID:   propertyID,
+		TraceID_ns:   trace,
+	}
 
-	// Non-blocking send:
-	// If the buffer is full, we drop the log rather than blocking the system.
 	select {
-	case logChan <- line:
-	// Queued successfully
+	case logChan <- entry:
 	default:
 		// Buffer full - drop message to preserve system stability (should never happen)
 		slog.Warn("Latency log buffer full, dropping log", "property", propertyID, "stage", stage)
