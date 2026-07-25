@@ -11,6 +11,7 @@ import (
 	"github.com/bluenviron/gomavlib/v3"
 	"github.com/bluenviron/gomavlib/v3/pkg/frame"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // FakeMessage mocks a MAVLink message struct.
@@ -21,6 +22,13 @@ type FakeMessage struct {
 }
 
 func (m *FakeMessage) GetID() uint32 { return 0x999 } // Arbitrary ID
+
+// FakeArrayMessage exercises array-indexed field extraction, e.g. "Motors[2]".
+type FakeArrayMessage struct {
+	Motors [4]uint16
+}
+
+func (m *FakeArrayMessage) GetID() uint32 { return 0x998 }
 
 func TestGoTypeToMavName(t *testing.T) {
 	// ... [Keep existing tests] ...
@@ -36,6 +44,41 @@ func TestGoTypeToMavName(t *testing.T) {
 			t.Errorf("goTypeToMavName(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+}
+
+// TestNormalizeReflectValue locks the type-standardization contract that
+// extractField now applies directly: signed ints -> int64, unsigned -> uint64,
+// everything else unchanged.
+func TestNormalizeReflectValue(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want any
+	}{
+		{"int8 -> int64", int8(7), int64(7)},
+		{"int32 -> int64", int32(-5), int64(-5)},
+		{"uint8 -> uint64", uint8(200), uint64(200)},
+		{"uint32 -> uint64", uint32(4000000000), uint64(4000000000)},
+		{"float32 unchanged", float32(1.5), float32(1.5)},
+		{"float64 unchanged", float64(2.5), float64(2.5)},
+		{"string unchanged", "hi", "hi"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, normalizeReflectValue(reflect.ValueOf(c.in)))
+		})
+	}
+}
+
+// TestExtractField_ArrayIndexNormalized verifies the array-indexed path also
+// normalizes its element type (uint16 -> uint64).
+func TestExtractField_ArrayIndexNormalized(t *testing.T) {
+	adapter := &MavlinkAdapter{fieldIndexCache: make(map[reflect.Type]map[string]int)}
+	msg := &FakeArrayMessage{Motors: [4]uint16{10, 20, 30, 40}}
+
+	v, ok := adapter.extractField(msg, "Motors[2]")
+	require.True(t, ok)
+	assert.Equal(t, uint64(30), v)
 }
 
 func TestApplyTransform(t *testing.T) {

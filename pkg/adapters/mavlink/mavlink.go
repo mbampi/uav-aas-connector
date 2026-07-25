@@ -198,22 +198,9 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 			continue
 		}
 
-		var valueToPass any = rawValue
-		rv := reflect.ValueOf(rawValue)
-		if rv.IsValid() {
-			k := rv.Kind()
-			// Handle signed integers (including enums like MavState)
-			if k >= reflect.Int && k <= reflect.Int64 {
-				valueToPass = rv.Int() // Standardizes to int64
-			}
-			// Handle unsigned integers (including enums like MavType)
-			if k >= reflect.Uint && k <= reflect.Uint64 {
-				valueToPass = rv.Uint() // Standardizes to uint64
-			}
-		}
-
-		// Use the pre-parsed scale and boolean flag
-		newValue, err := a.applyTransform(valueToPass, rule.parsedScale, rule.hasScale)
+		// rawValue is already normalized by extractField (signed ints -> int64,
+		// unsigned -> uint64), so no second reflection pass is needed here.
+		newValue, err := a.applyTransform(rawValue, rule.parsedScale, rule.hasScale)
 		if err != nil {
 			slog.Warn("Transform error", "field", rule.SourceField, "error", err)
 			continue
@@ -238,7 +225,8 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 }
 
 // extractField uses cached reflection indices to get a field's value quickly.
-// It supports array indexing in fieldName, e.g., "Motors[0]".
+// It supports array indexing in fieldName, e.g., "Motors[0]". Integer kinds
+// are normalized to int64/uint64 (see normalizeReflectValue).
 func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (any, bool) {
 	rv := reflect.ValueOf(msg)
 	if rv.Kind() == reflect.Ptr {
@@ -294,7 +282,7 @@ func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (an
 		k := fieldVal.Kind()
 		if k == reflect.Array || k == reflect.Slice {
 			if arrayIdx < fieldVal.Len() {
-				return fieldVal.Index(arrayIdx).Interface(), true
+				return normalizeReflectValue(fieldVal.Index(arrayIdx)), true
 			}
 			// Index out of bounds
 			return nil, false
@@ -304,7 +292,23 @@ func (a *MavlinkAdapter) extractField(msg message.Message, fieldName string) (an
 	}
 
 	// Fast access by index
-	return fieldVal.Interface(), true
+	return normalizeReflectValue(fieldVal), true
+}
+
+// normalizeReflectValue boxes a reflected field value into an 'any',
+// standardizing all signed integer kinds to int64 and unsigned kinds to
+// uint64 (so enums like MavState/MavType are handled uniformly downstream).
+// Operating on the reflect.Value we already hold avoids a second
+// reflect.ValueOf pass on the hot path.
+func normalizeReflectValue(v reflect.Value) any {
+	switch k := v.Kind(); {
+	case k >= reflect.Int && k <= reflect.Int64:
+		return v.Int()
+	case k >= reflect.Uint && k <= reflect.Uint64:
+		return v.Uint()
+	default:
+		return v.Interface()
+	}
 }
 
 // applyTransform applies scaling using pre-parsed values.
