@@ -84,7 +84,7 @@ func TestNewAASCore_Success(t *testing.T) {
 	cfg := config.AASConfig{FilePath: filePath}
 
 	// Call the function
-	core, err := NewAASCore(cfg)
+	core, err := NewAASCore(cfg, true)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -121,7 +121,7 @@ func TestNewAASCore_FileNotFound(t *testing.T) {
 	cfg := config.AASConfig{FilePath: filepath.Join(t.TempDir(), "non-existent-file.json")}
 
 	// Call the function
-	core, err := NewAASCore(cfg)
+	core, err := NewAASCore(cfg, true)
 
 	// Assertions
 	assert.Error(t, err)
@@ -136,7 +136,7 @@ func TestNewAASCore_InvalidJSON(t *testing.T) {
 	cfg := config.AASConfig{FilePath: filePath}
 
 	// Call the function
-	core, err := NewAASCore(cfg)
+	core, err := NewAASCore(cfg, true)
 
 	// Assertions
 	assert.Error(t, err)
@@ -151,7 +151,7 @@ func TestNewAASCore_InvalidAASSchema(t *testing.T) {
 	cfg := config.AASConfig{FilePath: filePath}
 
 	// Call the function
-	core, err := NewAASCore(cfg)
+	core, err := NewAASCore(cfg, true)
 
 	// Assertions
 	assert.Error(t, err)
@@ -165,7 +165,7 @@ func TestNewAASCore_InvalidAASSchema(t *testing.T) {
 // Input Event -> Core Update Model -> Broadcast to Subscriber
 func TestUpdateLogic_Integration(t *testing.T) {
 	filePath := createTempJSONFile(t, validAASJson)
-	c, err := NewAASCore(config.AASConfig{FilePath: filePath})
+	c, err := NewAASCore(config.AASConfig{FilePath: filePath}, true)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,7 +240,7 @@ func TestUpdateLogic_Integration(t *testing.T) {
 // (the AAS library itself has no locking of its own).
 func TestConcurrentUpdatesAcrossSubmodels_NoRace(t *testing.T) {
 	filePath := createTempJSONFile(t, validAASJson)
-	c, err := NewAASCore(config.AASConfig{FilePath: filePath})
+	c, err := NewAASCore(config.AASConfig{FilePath: filePath}, true)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -283,9 +283,73 @@ func TestConcurrentUpdatesAcrossSubmodels_NoRace(t *testing.T) {
 	wg.Wait()
 }
 
+// sendAndAwaitBroadcast pushes one update through the core and waits for it to
+// be broadcast, which guarantees updateModel has finished processing it.
+func sendAndAwaitBroadcast(t *testing.T, inChan chan *AASUpdateEvent, subChan <-chan *AASUpdateEvent, ev *AASUpdateEvent) {
+	t.Helper()
+	inChan <- ev
+	select {
+	case <-subChan:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for broadcast")
+	}
+}
+
+// TestUpdateModel_MaintainStringState verifies that with the flag on, updates
+// are written back into the in-memory model (as before).
+func TestUpdateModel_MaintainStringState(t *testing.T) {
+	filePath := createTempJSONFile(t, validAASJson)
+	c, err := NewAASCore(config.AASConfig{FilePath: filePath}, true)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	subChan, err := c.Subscribe(ctx)
+	require.NoError(t, err)
+	inChan := make(chan *AASUpdateEvent)
+	go c.Start(ctx, inChan)
+
+	sendAndAwaitBroadcast(t, inChan, subChan, &AASUpdateEvent{
+		SubmodelID: "Identification", PropertyID: "Manufacturer", Value: "New Corp", Timestamp: time.Now(),
+	})
+
+	val, err := c.GetPropertyValue("Identification", "Manufacturer")
+	require.NoError(t, err)
+	require.NotNil(t, val)
+	assert.Equal(t, "New Corp", *val)
+}
+
+// TestUpdateModel_PushOnlySkipsStringState verifies that with the flag off,
+// updates are still broadcast but the in-memory model retains its initial
+// value (the hot path skipped the string write).
+func TestUpdateModel_PushOnlySkipsStringState(t *testing.T) {
+	filePath := createTempJSONFile(t, validAASJson)
+	c, err := NewAASCore(config.AASConfig{FilePath: filePath}, false)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	subChan, err := c.Subscribe(ctx)
+	require.NoError(t, err)
+	inChan := make(chan *AASUpdateEvent)
+	go c.Start(ctx, inChan)
+
+	sendAndAwaitBroadcast(t, inChan, subChan, &AASUpdateEvent{
+		SubmodelID: "Identification", PropertyID: "Manufacturer", Value: "New Corp", Timestamp: time.Now(),
+	})
+
+	// Model was not touched: it still holds the value loaded from JSON.
+	val, err := c.GetPropertyValue("Identification", "Manufacturer")
+	require.NoError(t, err)
+	require.NotNil(t, val)
+	assert.Equal(t, "Generic Drone Company", *val)
+}
+
 func TestGetElementDataType(t *testing.T) {
 	filePath := createTempJSONFile(t, validAASJson)
-	c, err := NewAASCore(config.AASConfig{FilePath: filePath})
+	c, err := NewAASCore(config.AASConfig{FilePath: filePath}, true)
 	require.NoError(t, err)
 
 	tests := []struct {

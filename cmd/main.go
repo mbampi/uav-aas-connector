@@ -58,11 +58,23 @@ func main() {
 		return adapter.Start(attemptCtx, rawChan)
 	})
 
-	coreInstance, err := core.NewAASCore(cfg.AAS)
+	// Only pull-style exporters read property values from the in-memory AAS
+	// model, so the core maintains that string state only when one is enabled;
+	// push-only deployments skip the per-event conversion and write-lock.
+	maintainStringState := false
+	for _, ec := range cfg.OutputExporters {
+		if ec.Enabled && exporters.RequiresLiveModelState(ec.Type) {
+			maintainStringState = true
+			break
+		}
+	}
+
+	coreInstance, err := core.NewAASCore(cfg.AAS, maintainStringState)
 	if err != nil {
 		slog.Error("Failed to create AAS core", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("AAS core created", "maintainStringState", maintainStringState)
 	go coreInstance.Start(ctx, rawChan)
 
 	// Start Output Exporters

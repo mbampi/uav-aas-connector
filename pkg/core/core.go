@@ -35,6 +35,13 @@ type AASCore struct {
 	propertyMap   map[string]aastypes.IProperty
 	submodelLocks map[string]*sync.RWMutex
 
+	// maintainStringState controls whether property updates are written back
+	// into the in-memory AAS model. Only pull-style consumers (e.g. the HTTP
+	// exporter) read those values; in a push-only deployment it's left false
+	// so the hot path skips the per-event string conversion and the submodel
+	// write-lock entirely.
+	maintainStringState bool
+
 	subsMu      sync.Mutex
 	subscribers []chan *AASUpdateEvent
 }
@@ -48,8 +55,11 @@ type AASUpdateEvent struct {
 	Timestamp  time.Time
 }
 
-// NewAASCore creates a new AASCore instance.
-func NewAASCore(cfg config.AASConfig) (*AASCore, error) {
+// NewAASCore creates a new AASCore instance. maintainStringState should be
+// true when a pull-style exporter (see exporters.RequiresLiveModelState) is
+// enabled; when false, the core skips writing string values back into the
+// model on the hot path.
+func NewAASCore(cfg config.AASConfig, maintainStringState bool) (*AASCore, error) {
 	slog.Info("Loading AAS model", "file", cfg.FilePath)
 
 	file, err := os.Open(cfg.FilePath)
@@ -71,10 +81,11 @@ func NewAASCore(cfg config.AASConfig) (*AASCore, error) {
 
 	slog.Info("AAS model loaded", "submodels", len(env.Submodels()))
 	return &AASCore{
-		env:           env,
-		subscribers:   make([]chan *AASUpdateEvent, 0),
-		propertyMap:   buildPropertyMap(env),
-		submodelLocks: buildSubmodelLocks(env),
+		env:                 env,
+		subscribers:         make([]chan *AASUpdateEvent, 0),
+		propertyMap:         buildPropertyMap(env),
+		submodelLocks:       buildSubmodelLocks(env),
+		maintainStringState: maintainStringState,
 	}, nil
 }
 
@@ -228,23 +239,26 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 
 // updateModel updates the model with new data and notifies subscribers.
 func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any, timestamp time.Time) {
-	cacheKey := submodelIdShort + "." + propertyIdPath
-
-	prop, exists := c.propertyMap[cacheKey]
+	prop, exists := c.propertyMap[submodelIdShort+"."+propertyIdPath]
 	if !exists {
 		return // Property not found in model
 	}
 
-	strValue := fastAnyToString(value)
+	instrumentation.Record("CORE", propertyIdPath, timestamp)
 
+	// In a push-only deployment nothing reads the model's string values, so
+	// skip the per-event string conversion and the submodel write-lock;
+	// exporters use the raw event value from the broadcast below instead.
 	// Only the submodel this property belongs to is locked, so writes to
 	// other submodels - and reads of them, e.g. concurrent HTTP pulls -
 	// proceed unimpeded instead of queuing behind a single model-wide lock.
-	lock := c.submodelLock(submodelIdShort)
-	lock.Lock()
-	instrumentation.Record("CORE", propertyIdPath, timestamp)
-	prop.SetValue(&strValue)
-	lock.Unlock()
+	if c.maintainStringState {
+		strValue := fastAnyToString(value)
+		lock := c.submodelLock(submodelIdShort)
+		lock.Lock()
+		prop.SetValue(&strValue)
+		lock.Unlock()
+	}
 
 	c.broadcast(&AASUpdateEvent{
 		SubmodelID: submodelIdShort,

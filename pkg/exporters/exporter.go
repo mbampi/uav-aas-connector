@@ -26,6 +26,19 @@ type OutputExporter interface {
 	Stop() error
 }
 
+// RequiresLiveModelState reports whether an exporter of the given type reads
+// property values from the in-memory AAS model at runtime (the "pull" model),
+// and therefore needs the core to keep those string values current. Push
+// exporters read the raw event value instead, so they don't require it.
+func RequiresLiveModelState(exporterType string) bool {
+	switch exporterType {
+	case "http":
+		return true
+	default:
+		return false
+	}
+}
+
 // NewOutputExporter creates a new OutputExporter based on the provided configuration.
 func NewOutputExporter(cfg config.ExporterConfig, core *core.AASCore) (OutputExporter, error) {
 	if !cfg.Enabled {
