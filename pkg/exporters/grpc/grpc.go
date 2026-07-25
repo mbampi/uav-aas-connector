@@ -49,22 +49,58 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	e.conn = conn
 	e.client = pb.NewAASIngestClient(conn)
 
-	// 2. Main Loop: Reconnect logic + Stream handling
+	// Decouple ingestion from the network: a dedicated goroutine owns the
+	// stream and performs the (potentially blocking) Send, while this loop
+	// only drains inChan into a buffered queue. A slow or stuck network can no
+	// longer stall inChan and make the core drop updates for this exporter.
+	sendChan := make(chan *core.AASUpdateEvent, sendQueueSize)
+	go e.sendLoop(ctx, sendChan)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
-			if err := e.runStream(ctx, inChan); err != nil {
-				slog.Error("gRPC stream error, retrying", "error", err)
-				time.Sleep(1 * time.Second)
+		case event, ok := <-inChan:
+			if !ok {
+				return nil
+			}
+			select {
+			case sendChan <- event:
+			default:
+				slog.Warn("gRPC send queue full, dropping update", "property", event.PropertyID)
 			}
 		}
 	}
 }
 
-func (e *Exporter) runStream(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
-	// Open the stream
+// sendQueueSize bounds the buffered send queue that absorbs network blips
+// before updates start being dropped.
+const sendQueueSize = 1000
+
+// sendLoop owns the gRPC stream and reconnects with a fixed backoff. It runs on
+// its own goroutine so the blocking Send never touches the ingest loop. A gRPC
+// stream must only be sent on from a single goroutine, which this satisfies.
+func (e *Exporter) sendLoop(ctx context.Context, sendChan <-chan *core.AASUpdateEvent) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			if err := e.streamAndSend(ctx, sendChan); err != nil {
+				slog.Error("gRPC stream error, retrying", "error", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(1 * time.Second):
+				}
+			}
+		}
+	}
+}
+
+// streamAndSend opens a stream and forwards queued events until the stream
+// fails (returning the error to trigger a reconnect) or the context ends.
+func (e *Exporter) streamAndSend(ctx context.Context, sendChan <-chan *core.AASUpdateEvent) error {
 	stream, err := e.client.StreamUpdates(ctx)
 	if err != nil {
 		return err
@@ -75,49 +111,55 @@ func (e *Exporter) runStream(ctx context.Context, inChan <-chan *core.AASUpdateE
 	for {
 		select {
 		case <-ctx.Done():
-			return e.stream.CloseSend()
+			return stream.CloseSend()
 
-		case event, ok := <-inChan:
+		case event, ok := <-sendChan:
 			if !ok {
-				return e.stream.CloseSend()
+				return stream.CloseSend()
 			}
 
-			// Convert Core Event -> Proto Message
-			req := &pb.UpdateRequest{
-				SubmodelId:   event.SubmodelID,
-				PropertyPath: event.PropertyID,
-				TimestampNs:  event.Timestamp.UnixNano(),
-			}
-
-			// Type Switch to populate the 'oneof' field
-			switch v := event.Value.(type) {
-			case float64:
-				req.Value = &pb.UpdateRequest_DoubleVal{DoubleVal: v}
-			case float32:
-				req.Value = &pb.UpdateRequest_DoubleVal{DoubleVal: float64(v)}
-			case int:
-				req.Value = &pb.UpdateRequest_IntVal{IntVal: int32(v)}
-			case int32:
-				req.Value = &pb.UpdateRequest_IntVal{IntVal: v}
-			case string:
-				req.Value = &pb.UpdateRequest_StringVal{StringVal: v}
-			case bool:
-				req.Value = &pb.UpdateRequest_BoolVal{BoolVal: v}
-			default:
-				// Fallback to string for unknown types
-				req.Value = &pb.UpdateRequest_StringVal{StringVal: fmt.Sprintf("%v", v)}
-			}
+			req := buildRequest(event)
 
 			instrumentation.Record("GRPC_SENDING", event.PropertyID, event.Timestamp)
 
-			// Send to stream (Blocking if network is backed up)
-			if err := e.stream.Send(req); err != nil {
+			// Send to stream (blocking if network is backed up, but this runs
+			// on the sender goroutine, so ingestion is unaffected).
+			if err := stream.Send(req); err != nil {
 				return err // Return error to trigger reconnect loop
 			}
 
 			instrumentation.Record("GRPC_SENT", event.PropertyID, event.Timestamp)
 		}
 	}
+}
+
+// buildRequest converts a core event into the protobuf message, populating the
+// 'oneof' value field from the event's concrete type.
+func buildRequest(event *core.AASUpdateEvent) *pb.UpdateRequest {
+	req := &pb.UpdateRequest{
+		SubmodelId:   event.SubmodelID,
+		PropertyPath: event.PropertyID,
+		TimestampNs:  event.Timestamp.UnixNano(),
+	}
+
+	switch v := event.Value.(type) {
+	case float64:
+		req.Value = &pb.UpdateRequest_DoubleVal{DoubleVal: v}
+	case float32:
+		req.Value = &pb.UpdateRequest_DoubleVal{DoubleVal: float64(v)}
+	case int:
+		req.Value = &pb.UpdateRequest_IntVal{IntVal: int32(v)}
+	case int32:
+		req.Value = &pb.UpdateRequest_IntVal{IntVal: v}
+	case string:
+		req.Value = &pb.UpdateRequest_StringVal{StringVal: v}
+	case bool:
+		req.Value = &pb.UpdateRequest_BoolVal{BoolVal: v}
+	default:
+		// Fallback to string for unknown types
+		req.Value = &pb.UpdateRequest_StringVal{StringVal: fmt.Sprintf("%v", v)}
+	}
+	return req
 }
 
 func (e *Exporter) Stop() error {
