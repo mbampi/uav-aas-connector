@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -42,16 +43,20 @@ func main() {
 
 	// Start Input Adapter
 	rawChan := make(chan *core.AASUpdateEvent, 1000)
-	adapter, err := adapters.NewInputAdapter(cfg.InputAdapter)
-	if err != nil {
+
+	// Validate the adapter config up front so a broken config fails fast
+	// instead of being retried forever by the supervisor below.
+	if _, err := adapters.NewInputAdapter(cfg.InputAdapter); err != nil {
 		slog.Error("Failed to create adapter", "error", err)
 		os.Exit(1)
 	}
-	go func(adpt adapters.InputAdapter) {
-		if err := adpt.Start(ctx, rawChan); err != nil {
-			slog.Error("Adapter runtime error", "error", err)
+	go runSupervised(ctx, "adapter:"+cfg.InputAdapter.Type, func(attemptCtx context.Context) error {
+		adapter, err := adapters.NewInputAdapter(cfg.InputAdapter)
+		if err != nil {
+			return err
 		}
-	}(adapter)
+		return adapter.Start(attemptCtx, rawChan)
+	})
 
 	coreInstance, err := core.NewAASCore(cfg.AAS)
 	if err != nil {
@@ -62,22 +67,23 @@ func main() {
 
 	// Start Output Exporters
 	for _, exporterCfg := range cfg.OutputExporters {
-		exporter, err := exporters.NewOutputExporter(exporterCfg, coreInstance)
-		if err != nil {
+		if _, err := exporters.NewOutputExporter(exporterCfg, coreInstance); err != nil {
 			slog.Error("Failed to create exporter", "error", err, "exporter", exporterCfg.Type)
 			continue
 		}
+
 		slog.Info("Starting exporter", "exporter", exporterCfg.Type)
-		go func(exp exporters.OutputExporter) {
-			aasUpdateChan, err := coreInstance.Subscribe(ctx)
+		go runSupervised(ctx, "exporter:"+exporterCfg.Type, func(attemptCtx context.Context) error {
+			exporter, err := exporters.NewOutputExporter(exporterCfg, coreInstance)
 			if err != nil {
-				slog.Error("Failed to subscribe exporter", "error", err, "exporter", exporterCfg.Type)
-				return
+				return err
 			}
-			if err := exp.Start(ctx, aasUpdateChan); err != nil {
-				slog.Error("Exporter runtime error", "error", err, "exporter", exporterCfg.Type)
+			aasUpdateChan, err := coreInstance.Subscribe(attemptCtx)
+			if err != nil {
+				return err
 			}
-		}(exporter)
+			return exporter.Start(attemptCtx, aasUpdateChan)
+		})
 	}
 
 	// Handle graceful shutdown
@@ -90,4 +96,56 @@ func main() {
 	time.Sleep(2 * time.Second) // Give some time for goroutines to finish
 
 	slog.Info("Shutdown complete")
+}
+
+const (
+	supervisorBaseBackoff = 1 * time.Second
+	supervisorMaxBackoff  = 30 * time.Second
+)
+
+// runSupervised runs start repeatedly until ctx is canceled, recovering from
+// panics and restarting after an exponential backoff whenever it returns an
+// error. Each attempt gets its own child context so any state tied to the
+// failed attempt (e.g. a core subscription) is torn down before the next one
+// begins.
+func runSupervised(ctx context.Context, name string, start func(attemptCtx context.Context) error) {
+	backoff := supervisorBaseBackoff
+
+	for ctx.Err() == nil {
+		attemptCtx, cancel := context.WithCancel(ctx)
+		startedAt := time.Now()
+		err := runAttempt(attemptCtx, start)
+		cancel()
+
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+
+		// A long-lived run failing is a fresh problem, not a continuation of
+		// an earlier one, so don't keep punishing it with an inflated backoff.
+		if time.Since(startedAt) > supervisorMaxBackoff {
+			backoff = supervisorBaseBackoff
+		}
+
+		slog.Error("Component stopped, restarting", "component", name, "error", err, "retry_in", backoff)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		backoff = min(backoff*2, supervisorMaxBackoff)
+	}
+}
+
+// runAttempt executes start once, converting any panic into an error so
+// runSupervised can decide whether to restart.
+func runAttempt(ctx context.Context, start func(context.Context) error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return start(ctx)
 }
