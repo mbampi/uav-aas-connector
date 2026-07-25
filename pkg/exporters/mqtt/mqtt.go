@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,12 +26,6 @@ type Exporter struct {
 	topicPrefix string
 	shards      []chan *core.AASUpdateEvent // per-worker queues; one worker per shard
 	wg          sync.WaitGroup             // WaitGroup for graceful shutdown
-}
-
-// Payload represents a standard "Time-stamped Value" for telemetry.
-type Payload struct {
-	Value     any    `json:"value"`
-	Timestamp string `json:"timestamp"` // ISO 8601
 }
 
 const (
@@ -205,15 +201,7 @@ func (e *Exporter) publish(event *core.AASUpdateEvent) {
 	path := strings.ReplaceAll(event.PropertyID, ".", "/")
 	topic := fmt.Sprintf("%s/submodels/%s/elements/%s", e.topicPrefix, smIDEncoded, path)
 
-	payload := Payload{
-		Value:     event.Value,
-		Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano),
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		slog.Error("MQTT error marshaling payload", "error", err)
-		return
-	}
+	data := encodePayload(event.Value, event.Timestamp)
 
 	instrumentation.Record("MQTT_SENDING", event.PropertyID, event.Timestamp)
 	token := e.client.Publish(topic, 0, false, data)
@@ -226,4 +214,85 @@ func (e *Exporter) publish(event *core.AASUpdateEvent) {
 			instrumentation.Record("MQTT_SENT", event.PropertyID, event.Timestamp)
 		}
 	}
+}
+
+// encodePayload builds the telemetry JSON payload
+// {"value":<v>,"timestamp":"<RFC3339Nano>"} directly, avoiding the reflection
+// cost of encoding/json on the hot path. The value is encoded per its concrete
+// type; unexpected types fall back to encoding/json.
+func encodePayload(value any, ts time.Time) []byte {
+	buf := make([]byte, 0, 96)
+	buf = append(buf, `{"value":`...)
+	buf = appendJSONValue(buf, value)
+	buf = append(buf, `,"timestamp":"`...)
+	// RFC3339Nano emits only JSON-safe characters, so it needs no escaping.
+	buf = ts.UTC().AppendFormat(buf, time.RFC3339Nano)
+	buf = append(buf, '"', '}')
+	return buf
+}
+
+// appendJSONValue appends value as a JSON literal. Integer kinds arrive from
+// the pipeline already standardized to int64/uint64 (see the MAVLink adapter).
+func appendJSONValue(buf []byte, value any) []byte {
+	switch v := value.(type) {
+	case string:
+		return appendJSONString(buf, v)
+	case bool:
+		return strconv.AppendBool(buf, v)
+	case float64:
+		return appendJSONFloat(buf, v, 64)
+	case float32:
+		return appendJSONFloat(buf, float64(v), 32)
+	case int:
+		return strconv.AppendInt(buf, int64(v), 10)
+	case int32:
+		return strconv.AppendInt(buf, int64(v), 10)
+	case int64:
+		return strconv.AppendInt(buf, v, 10)
+	case uint32:
+		return strconv.AppendUint(buf, uint64(v), 10)
+	case uint64:
+		return strconv.AppendUint(buf, v, 10)
+	default:
+		// Safety net for unexpected types.
+		if b, err := json.Marshal(v); err == nil {
+			return append(buf, b...)
+		}
+		return append(buf, "null"...)
+	}
+}
+
+// appendJSONFloat appends f, emitting null for NaN/Inf (which are not valid
+// JSON) so the payload always parses.
+func appendJSONFloat(buf []byte, f float64, bitSize int) []byte {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return append(buf, "null"...)
+	}
+	return strconv.AppendFloat(buf, f, 'f', -1, bitSize)
+}
+
+// appendJSONString appends s as a quoted, escaped JSON string.
+func appendJSONString(buf []byte, s string) []byte {
+	const hex = "0123456789abcdef"
+	buf = append(buf, '"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"':
+			buf = append(buf, '\\', '"')
+		case c == '\\':
+			buf = append(buf, '\\', '\\')
+		case c == '\n':
+			buf = append(buf, '\\', 'n')
+		case c == '\r':
+			buf = append(buf, '\\', 'r')
+		case c == '\t':
+			buf = append(buf, '\\', 't')
+		case c < 0x20:
+			buf = append(buf, '\\', 'u', '0', '0', hex[c>>4], hex[c&0xF])
+		default:
+			buf = append(buf, c)
+		}
+	}
+	return append(buf, '"')
 }
