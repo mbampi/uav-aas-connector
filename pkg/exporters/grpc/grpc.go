@@ -23,6 +23,7 @@ type Exporter struct {
 	stream   pb.AASIngest_StreamUpdatesClient
 	host     string
 	security config.SecurityConfig
+	drops    *instrumentation.Counter // events dropped because sendChan was full
 }
 
 func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
@@ -31,7 +32,11 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 		host = fmt.Sprintf("localhost:%d", cfg.Port)
 	}
 
-	return &Exporter{host: host, security: cfg.Security}, nil
+	return &Exporter{
+		host:     host,
+		security: cfg.Security,
+		drops:    instrumentation.DropCounter("exporter.grpc"),
+	}, nil
 }
 
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {
@@ -67,7 +72,10 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			select {
 			case sendChan <- event:
 			default:
-				slog.Warn("gRPC send queue full, dropping update", "property", event.PropertyID)
+				// Network can't keep up and the buffer is full; count the loss
+				// (instrumentation.ReportDrops surfaces it periodically) instead
+				// of logging per-event.
+				e.drops.Inc()
 			}
 		}
 	}

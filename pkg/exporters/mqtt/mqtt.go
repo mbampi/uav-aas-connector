@@ -26,6 +26,7 @@ type Exporter struct {
 	topicPrefix string
 	shards      []chan *core.AASUpdateEvent // per-worker queues; one worker per shard
 	wg          sync.WaitGroup             // WaitGroup for graceful shutdown
+	drops       *instrumentation.Counter   // events dropped because a shard was full
 }
 
 const (
@@ -98,6 +99,7 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 		client:      client,
 		topicPrefix: prefix,
 		shards:      shards,
+		drops:       instrumentation.DropCounter("exporter.mqtt"),
 	}, nil
 }
 
@@ -139,7 +141,10 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			select {
 			case shard <- event:
 			default:
-				slog.Warn("MQTT worker pool saturated, dropping update", "property", event.PropertyID)
+				// Broker/worker can't keep up and this shard is full; count the
+				// loss (instrumentation.ReportDrops surfaces it periodically)
+				// instead of logging per-event.
+				e.drops.Inc()
 			}
 		}
 	}

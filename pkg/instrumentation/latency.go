@@ -147,6 +147,7 @@ func writer() {
 // Close flushes the channel and closes the file.
 func Close() {
 	logSummary()
+	logDropSummary()
 
 	if logChan != nil {
 		close(logChan) // Signal writer to stop processing after draining buffer

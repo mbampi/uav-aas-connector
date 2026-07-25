@@ -43,7 +43,16 @@ type AASCore struct {
 	maintainStringState bool
 
 	subsMu      sync.Mutex
-	subscribers []chan *AASUpdateEvent
+	subscribers []*subscriber
+}
+
+// subscriber is one broadcast sink plus the counter tracking how many events
+// were dropped for it because its channel was full. Each subscriber gets its
+// own counter so a single lagging exporter is visible by name rather than
+// hidden in an aggregate.
+type subscriber struct {
+	ch    chan *AASUpdateEvent
+	drops *instrumentation.Counter
 }
 
 // AASUpdateEvent is the "push" notification from the core.
@@ -82,7 +91,7 @@ func NewAASCore(cfg config.AASConfig, maintainStringState bool) (*AASCore, error
 	slog.Info("AAS model loaded", "submodels", len(env.Submodels()))
 	return &AASCore{
 		env:                 env,
-		subscribers:         make([]chan *AASUpdateEvent, 0),
+		subscribers:         make([]*subscriber, 0),
 		propertyMap:         buildPropertyMap(env),
 		submodelLocks:       buildSubmodelLocks(env),
 		maintainStringState: maintainStringState,
@@ -212,12 +221,18 @@ func (c *AASCore) Start(ctx context.Context, inChan <-chan *AASUpdateEvent) {
 	}
 }
 
-// Subscribe creates a new subscription channel for AAS update events.
-func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error) {
+// Subscribe creates a new subscription channel for AAS update events. name
+// identifies the subscriber (typically the exporter type) and labels the
+// drop counter reported when this subscriber can't keep up.
+func (c *AASCore) Subscribe(ctx context.Context, name string) (<-chan *AASUpdateEvent, error) {
 	subChan := make(chan *AASUpdateEvent, 1000)
+	sub := &subscriber{
+		ch:    subChan,
+		drops: instrumentation.DropCounter("core.broadcast." + name),
+	}
 
 	c.subsMu.Lock()
-	c.subscribers = append(c.subscribers, subChan)
+	c.subscribers = append(c.subscribers, sub)
 	c.subsMu.Unlock()
 
 	go func() {
@@ -225,8 +240,8 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 		c.subsMu.Lock()
 		defer c.subsMu.Unlock()
 
-		for i, ch := range c.subscribers {
-			if ch == subChan {
+		for i, s := range c.subscribers {
+			if s == sub {
 				c.subscribers = append(c.subscribers[:i], c.subscribers[i+1:]...)
 				close(subChan)
 				break
@@ -266,18 +281,20 @@ func (c *AASCore) updateModel(ev *AASUpdateEvent) {
 	c.broadcast(ev)
 }
 
-// broadcast fans updateEvent out to all subscribers. Sends are
-// non-blocking: a slow/stuck exporter never stalls ingestion or other
-// exporters, at the cost of silently dropping updates for that subscriber.
+// broadcast fans updateEvent out to all subscribers. Sends are non-blocking: a
+// slow/stuck exporter never stalls ingestion or other exporters, at the cost of
+// dropping updates for that subscriber. Each drop is counted per-subscriber
+// (see ReportDrops) so the previously silent loss is now visible by name.
 func (c *AASCore) broadcast(updateEvent *AASUpdateEvent) {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
 
-	for _, subChan := range c.subscribers {
+	for _, sub := range c.subscribers {
 		select {
-		case subChan <- updateEvent:
+		case sub.ch <- updateEvent:
 		default:
-			// Allows fast exporters to proceed even if one exporter is clogged
+			// Fast exporters still proceed even if one exporter is clogged.
+			sub.drops.Inc()
 		}
 	}
 }

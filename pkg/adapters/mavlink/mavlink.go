@@ -33,6 +33,10 @@ type MavlinkAdapter struct {
 	// Caches to optimize reflection performance (O(1) lookups)
 	typeNameCache   map[reflect.Type]string
 	fieldIndexCache map[reflect.Type]map[string]int
+
+	// drops counts events discarded because outChan was full (core not keeping
+	// up). Resolved once so the hot path never touches the counter registry.
+	drops *instrumentation.Counter
 }
 
 // mavlinkRule extends the base configuration with pre-parsed fields
@@ -107,6 +111,7 @@ func NewAdapter(cfg config.AdapterConfig) (*MavlinkAdapter, error) {
 		mappingRules:    rules,
 		typeNameCache:   make(map[reflect.Type]string),
 		fieldIndexCache: make(map[reflect.Type]map[string]int),
+		drops:           instrumentation.DropCounter("adapter.mavlink"),
 	}, nil
 }
 
@@ -219,7 +224,10 @@ func (a *MavlinkAdapter) handleFrame(e *gomavlib.EventFrame) {
 		case a.outChan <- updateEvent:
 			// Success
 		default:
-			slog.Warn("AASUpdateEvent channel full, discarding update", "property", updateEvent.PropertyID)
+			// Core isn't draining fast enough; count the loss rather than
+			// logging per-event (which floods under sustained congestion).
+			// instrumentation.ReportDrops surfaces it periodically.
+			a.drops.Inc()
 		}
 	}
 }

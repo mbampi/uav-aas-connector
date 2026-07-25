@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 	"uav-aas-connector/pkg/config"
+	"uav-aas-connector/pkg/instrumentation"
 
 	aastypes "github.com/aas-core-works/aas-core3.0-golang/types"
 	"github.com/stretchr/testify/assert"
@@ -175,7 +176,7 @@ func TestUpdateLogic_Integration(t *testing.T) {
 	inChan := make(chan *AASUpdateEvent)
 
 	// 2. Setup Subscriber (Output)
-	subChan, err := c.Subscribe(ctx)
+	subChan, err := c.Subscribe(ctx, "test")
 	require.NoError(t, err)
 
 	// 3. Start Core
@@ -283,6 +284,45 @@ func TestConcurrentUpdatesAcrossSubmodels_NoRace(t *testing.T) {
 	wg.Wait()
 }
 
+// TestBroadcast_CountsDropsWhenSubscriberFull verifies the previously silent
+// broadcast drop is now counted per-subscriber: a subscriber that never drains
+// its channel overflows the 1000-deep buffer, and the overflow is recorded on
+// that subscriber's drop counter.
+func TestBroadcast_CountsDropsWhenSubscriberFull(t *testing.T) {
+	filePath := createTempJSONFile(t, validAASJson)
+	c, err := NewAASCore(config.AASConfig{FilePath: filePath}, false)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A unique name isolates this counter from other tests in the package.
+	const subName = "drops-full-test"
+	// Subscribe but never read: the subscriber's buffered channel fills up.
+	if _, err := c.Subscribe(ctx, subName); err != nil {
+		require.NoError(t, err)
+	}
+
+	inChan := make(chan *AASUpdateEvent)
+	go c.Start(ctx, inChan)
+
+	// inChan is unbuffered, so the Nth send returns only after the core has
+	// finished broadcasting event N-1. Pushing more than the 1000-deep
+	// subscriber buffer therefore guarantees the surplus is dropped.
+	const total = 1500
+	for i := 0; i < total; i++ {
+		inChan <- &AASUpdateEvent{
+			SubmodelID: "Identification", PropertyID: "Manufacturer", Value: "x", Timestamp: time.Now(),
+		}
+	}
+
+	// By the time the final send returns, events 1..total-1 are fully
+	// broadcast: 1000 buffered, the rest dropped. Allow the last in-flight
+	// event to not yet be counted.
+	drops := instrumentation.DropCounter("core.broadcast." + subName).Value()
+	assert.GreaterOrEqual(t, drops, uint64(total-1000-1))
+}
+
 // sendAndAwaitBroadcast pushes one update through the core and waits for it to
 // be broadcast, which guarantees updateModel has finished processing it.
 func sendAndAwaitBroadcast(t *testing.T, inChan chan *AASUpdateEvent, subChan <-chan *AASUpdateEvent, ev *AASUpdateEvent) {
@@ -305,7 +345,7 @@ func TestUpdateModel_MaintainStringState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	subChan, err := c.Subscribe(ctx)
+	subChan, err := c.Subscribe(ctx, "test")
 	require.NoError(t, err)
 	inChan := make(chan *AASUpdateEvent)
 	go c.Start(ctx, inChan)
@@ -331,7 +371,7 @@ func TestUpdateModel_PushOnlySkipsStringState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	subChan, err := c.Subscribe(ctx)
+	subChan, err := c.Subscribe(ctx, "test")
 	require.NoError(t, err)
 	inChan := make(chan *AASUpdateEvent)
 	go c.Start(ctx, inChan)

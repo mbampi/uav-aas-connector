@@ -36,6 +36,10 @@ type Exporter struct {
 	pendingUpdates map[string]*core.AASUpdateEvent
 	pendingMu      sync.Mutex
 	triggerChan    chan struct{} // Used to wake up the network worker instantly
+
+	// drops counts events discarded when a batch is abandoned after a failed
+	// write + reconnect + retry.
+	drops *instrumentation.Counter
 }
 
 // NewExporter creates a new OPC UA exporter instance.
@@ -73,6 +77,7 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 		maxAge:         maxAge,
 		pendingUpdates: make(map[string]*core.AASUpdateEvent),
 		triggerChan:    make(chan struct{}, 1), // Buffer of 1 ensures non-blocking triggers
+		drops:          instrumentation.DropCounter("exporter.opcua_client"),
 	}, nil
 }
 
@@ -167,7 +172,8 @@ func (e *Exporter) networkWorker(ctx context.Context) {
 
 					// Retry after reconnect
 					if err := e.writeBatch(ctx, filteredBatch); err != nil {
-						slog.Error("OPCUA batch retry failed, dropping batch", "error", err)
+						e.drops.Add(uint64(len(filteredBatch)))
+						slog.Error("OPCUA batch retry failed, dropping batch", "error", err, "dropped", len(filteredBatch))
 					}
 				}
 			}
