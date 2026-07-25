@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -31,6 +32,9 @@ func NewExporter(cfg config.ExporterConfig, core *core.AASCore) (*HttpExporter, 
 	if core == nil {
 		return nil, fmt.Errorf("AASCore instance is required for HttpExporter")
 	}
+	if cfg.Security.TLSEnabled && (cfg.Security.CertFile == "" || cfg.Security.KeyFile == "") {
+		return nil, fmt.Errorf("certFile and keyFile are required when security.tlsEnabled is true")
+	}
 	return &HttpExporter{
 		cfg:  cfg,
 		core: core,
@@ -50,10 +54,15 @@ func (h *HttpExporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateE
 	// Get specific Submodel by ID (Base64URL encoded)
 	mux.HandleFunc("GET /submodels/{id}", h.handleGetSubmodelByID)
 
+	var handler http.Handler = mux
+	if h.cfg.Security.Username != "" {
+		handler = basicAuthMiddleware(h.cfg.Security.Username, h.cfg.Security.Password, mux)
+	}
+
 	addr := fmt.Sprintf(":%d", h.cfg.Port)
 	h.server = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: handler,
 		BaseContext: func(_ net.Listener) context.Context {
 			return ctx
 		},
@@ -62,8 +71,16 @@ func (h *HttpExporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateE
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		slog.Info("HttpExporter listening", "addr", addr)
-		if err := h.server.ListenAndServe(); err != http.ErrServerClosed {
+		slog.Info("HttpExporter listening", "addr", addr, "tls", h.cfg.Security.TLSEnabled)
+
+		var err error
+		if h.cfg.Security.TLSEnabled {
+			err = h.server.ListenAndServeTLS(h.cfg.Security.CertFile, h.cfg.Security.KeyFile)
+		} else {
+			err = h.server.ListenAndServe()
+		}
+
+		if err != http.ErrServerClosed {
 			slog.Error("HttpExporter server error", "error", err)
 		} else {
 			slog.Info("HttpExporter server shut down gracefully")
@@ -95,6 +112,24 @@ func (h *HttpExporter) Stop() error {
 	h.wg.Wait()
 	slog.Info("HttpExporter stopped")
 	return nil
+}
+
+// basicAuthMiddleware requires HTTP Basic credentials matching user/pass on
+// every request, using a constant-time comparison so a failed attempt can't
+// leak timing information about the configured password.
+func basicAuthMiddleware(user, pass string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, ok := r.BasicAuth()
+		validUser := subtle.ConstantTimeCompare([]byte(gotUser), []byte(user)) == 1
+		validPass := subtle.ConstantTimeCompare([]byte(gotPass), []byte(pass)) == 1
+
+		if !ok || !validUser || !validPass {
+			w.Header().Set("WWW-Authenticate", `Basic realm="uav-aas-connector"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleGetAllSubmodels returns a list of all available submodels.

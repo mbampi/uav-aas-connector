@@ -47,7 +47,23 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 	if broker == "" {
 		broker = fmt.Sprintf("tcp://localhost:%d", cfg.Port)
 	}
+
+	if cfg.Security.TLSEnabled {
+		if !hasTLSScheme(broker) {
+			return nil, fmt.Errorf("mqtt: host must use a TLS scheme (e.g. ssl://) when security.tlsEnabled is true, got %q", broker)
+		}
+		tlsConfig, err := cfg.Security.BuildTLSConfig()
+		if err != nil {
+			return nil, fmt.Errorf("mqtt: %w", err)
+		}
+		opts.SetTLSConfig(tlsConfig)
+	}
 	opts.AddBroker(broker)
+
+	if cfg.Security.Username != "" {
+		opts.SetUsername(cfg.Security.Username)
+		opts.SetPassword(cfg.Security.Password)
+	}
 
 	if cfg.ClientID != "" {
 		opts.SetClientID(cfg.ClientID)
@@ -79,6 +95,18 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 		topicPrefix: prefix,
 		taskChan:    make(chan publishTask, 10000), // Initialize with a buffer
 	}, nil
+}
+
+// hasTLSScheme reports whether broker uses one of the schemes paho.mqtt
+// dials over TLS. It catches the common mistake of enabling
+// security.tlsEnabled without switching the broker URL away from tcp://.
+func hasTLSScheme(broker string) bool {
+	for _, scheme := range []string{"ssl://", "tls://", "mqtts://", "mqtt+ssl://", "tcps://"} {
+		if strings.HasPrefix(broker, scheme) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent) error {

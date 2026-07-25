@@ -44,6 +44,9 @@ type ExporterConfig struct {
 	// Performance and Resiliency Flags
 	EnableDeduplication bool    `yaml:"enableDeduplication,omitempty"` // Keeps only the latest value per property in a batch
 	MaxAgeSeconds       float64 `yaml:"maxAgeSeconds,omitempty"`       // Drops messages older than this (0 means disabled)
+
+	// Transport security and authentication (see SecurityConfig).
+	Security SecurityConfig `yaml:"security,omitempty"`
 }
 
 // AdvancedConfig represents advanced configuration options.

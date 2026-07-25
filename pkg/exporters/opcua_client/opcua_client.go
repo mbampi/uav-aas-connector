@@ -46,12 +46,14 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 	}
 	endpoint := fmt.Sprintf("opc.tcp://%s:%d", host, cfg.Port)
 
-	slog.Info("OPCUA initializing exporter", "endpoint", endpoint)
+	slog.Info("OPCUA initializing exporter", "endpoint", endpoint, "tls", cfg.Security.TLSEnabled)
 
-	c, err := opcua.NewClient(endpoint,
-		opcua.SecurityMode(ua.MessageSecurityModeNone),
-		opcua.AuthAnonymous(),
-	)
+	opts, err := clientSecurityOptions(cfg.Security)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OPC UA client security config: %w", err)
+	}
+
+	c, err := opcua.NewClient(endpoint, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OPC UA client: %w", err)
 	}
@@ -510,6 +512,36 @@ func (e *Exporter) filterBatch(batch []*core.AASUpdateEvent) []*core.AASUpdateEv
 	}
 
 	return finalBatch
+}
+
+// clientSecurityOptions translates the shared security config into gopcua
+// client options. TLSEnabled switches the secure channel from None to
+// Sign+Encrypt with Basic256Sha256, using the endpoint's own certificate;
+// Username/Password select username authentication over anonymous.
+func clientSecurityOptions(cfg config.SecurityConfig) ([]opcua.Option, error) {
+	var opts []opcua.Option
+
+	if cfg.TLSEnabled {
+		if cfg.CertFile == "" || cfg.KeyFile == "" {
+			return nil, fmt.Errorf("certFile and keyFile are required when tlsEnabled is true")
+		}
+		opts = append(opts,
+			opcua.CertificateFile(cfg.CertFile),
+			opcua.PrivateKeyFile(cfg.KeyFile),
+			opcua.SecurityMode(ua.MessageSecurityModeSignAndEncrypt),
+			opcua.SecurityPolicy(ua.SecurityPolicyURIBasic256Sha256),
+		)
+	} else {
+		opts = append(opts, opcua.SecurityMode(ua.MessageSecurityModeNone))
+	}
+
+	if cfg.Username != "" {
+		opts = append(opts, opcua.AuthUsername(cfg.Username, cfg.Password))
+	} else {
+		opts = append(opts, opcua.AuthAnonymous())
+	}
+
+	return opts, nil
 }
 
 // reconnect cleanly closes broken sessions, flushes server caches, and attempts

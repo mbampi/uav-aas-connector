@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -45,8 +46,14 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 		host = cfg.Host
 	}
 
-	certFile := "./pki/server.crt"
-	keyFile := "./pki/server.key"
+	certFile := cfg.Security.CertFile
+	if certFile == "" {
+		certFile = "./pki/server.crt"
+	}
+	keyFile := cfg.Security.KeyFile
+	if keyFile == "" {
+		keyFile = "./pki/server.key"
+	}
 	if err := ensurePKI(certFile, keyFile); err != nil {
 		return nil, fmt.Errorf("failed to generate certs: %w", err)
 	}
@@ -64,8 +71,7 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 		certFile,
 		keyFile,
 		endpoint,
-		server.WithAnonymousIdentity(true),
-		server.WithSecurityPolicyNone(true),
+		serverSecurityOptions(cfg.Security)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OPC UA server: %w", err)
@@ -372,6 +378,34 @@ func toBool(val any) (bool, error) {
 		return strings.ToLower(s) == "true", nil
 	}
 	return false, nil
+}
+
+// serverSecurityOptions translates the shared security config into awcullen
+// server options. TLSEnabled disables the plaintext (SecurityPolicy=None)
+// endpoint, leaving only the always-available Basic256Sha256 (Sign+Encrypt)
+// one; Username/Password require username authentication instead of
+// anonymous access.
+func serverSecurityOptions(cfg config.SecurityConfig) []server.Option {
+	opts := []server.Option{
+		server.WithSecurityPolicyNone(!cfg.TLSEnabled),
+	}
+
+	if cfg.Username == "" {
+		return append(opts, server.WithAnonymousIdentity(true))
+	}
+
+	user, pass := cfg.Username, cfg.Password
+	return append(opts,
+		server.WithAnonymousIdentity(false),
+		server.WithAuthenticateUserNameIdentityFunc(func(id ua.UserNameIdentity, _ string, _ string) error {
+			validUser := subtle.ConstantTimeCompare([]byte(id.UserName), []byte(user)) == 1
+			validPass := subtle.ConstantTimeCompare([]byte(id.Password), []byte(pass)) == 1
+			if !validUser || !validPass {
+				return ua.BadUserAccessDenied
+			}
+			return nil
+		}),
+	)
 }
 
 // ensurePKI checks for existing cert/key files or generates new ones.
