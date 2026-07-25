@@ -18,13 +18,25 @@ import (
 
 // AASCore is the central, stateful struct.
 type AASCore struct {
-	// The in-memory, thread-safe model of the AAS
-	env         aastypes.IEnvironment
-	modelMutex  sync.RWMutex
-	subscribers []chan *AASUpdateEvent
+	// The in-memory AAS model. Its structure (submodels, elements, nesting)
+	// is fixed at load time and never mutated afterwards, so it can be
+	// traversed concurrently without synchronization. Only the *values*
+	// held by individual properties change at runtime; those are protected
+	// by submodelLocks below.
+	env aastypes.IEnvironment
 
-	// flat routing map for O(1) property lookups
-	propertyMap map[string]aastypes.IProperty
+	// propertyMap and submodelLocks are both built once in NewAASCore and
+	// never modified afterwards, so concurrent unsynchronized reads of the
+	// maps themselves are safe (Go only requires synchronization against
+	// concurrent writes). submodelLocks has one lock per submodel, so an
+	// update to one submodel never blocks reads/writes of another - unlike
+	// a single model-wide lock, which serializes everything through one
+	// mutex regardless of which property is involved.
+	propertyMap   map[string]aastypes.IProperty
+	submodelLocks map[string]*sync.RWMutex
+
+	subsMu      sync.Mutex
+	subscribers []chan *AASUpdateEvent
 }
 
 // AASUpdateEvent is the "push" notification from the core.
@@ -59,27 +71,23 @@ func NewAASCore(cfg config.AASConfig) (*AASCore, error) {
 
 	slog.Info("AAS model loaded", "submodels", len(env.Submodels()))
 	return &AASCore{
-		env:         env,
-		subscribers: make([]chan *AASUpdateEvent, 0),
-		propertyMap: buildPropertyMap(env),
+		env:           env,
+		subscribers:   make([]chan *AASUpdateEvent, 0),
+		propertyMap:   buildPropertyMap(env),
+		submodelLocks: buildSubmodelLocks(env),
 	}, nil
 }
 
 // GetAllSubmodels retrieves all submodels in the environment
 func (c *AASCore) GetAllSubmodels() []aastypes.ISubmodel {
-	c.modelMutex.RLock()
-	defer c.modelMutex.RUnlock()
-
 	if c.env.Submodels() == nil {
 		return []aastypes.ISubmodel{}
 	}
 	return c.env.Submodels()
 }
 
-// GetSubmodel retrieves a submodel by its idShort
+// GetSubmodel retrieves a submodel by its idShort.
 func (c *AASCore) GetSubmodel(idShort string) (aastypes.ISubmodel, error) {
-	c.modelMutex.RLock()
-	defer c.modelMutex.RUnlock()
 	sm := findSubmodel(c.env, idShort)
 	if sm == nil {
 		return nil, fmt.Errorf("not found")
@@ -89,8 +97,6 @@ func (c *AASCore) GetSubmodel(idShort string) (aastypes.ISubmodel, error) {
 
 // GetSubmodelByID retrieves a submodel by its global ID (e.g., urn:...)
 func (c *AASCore) GetSubmodelByID(id string) (aastypes.ISubmodel, error) {
-	c.modelMutex.RLock()
-	defer c.modelMutex.RUnlock()
 	sm := findSubmodelByID(c.env, id)
 	if sm == nil {
 		return nil, fmt.Errorf("submodel with id '%s' not found", id)
@@ -98,19 +104,82 @@ func (c *AASCore) GetSubmodelByID(id string) (aastypes.ISubmodel, error) {
 	return sm, nil
 }
 
-// GetElementDataType looks up the data type defined in the AAS JSON for a specific path.
+// GetElementDataType looks up the data type defined in the AAS JSON for a
+// specific path. ValueType is fixed at load time, so no locking is needed.
 func (c *AASCore) GetElementDataType(submodelIdShort, propertyIdPath string) (aastypes.DataTypeDefXSD, error) {
-	cacheKey := submodelIdShort + "." + propertyIdPath
-
-	c.modelMutex.RLock()
-	prop, exists := c.propertyMap[cacheKey]
-	c.modelMutex.RUnlock()
-
+	prop, exists := c.propertyMap[submodelIdShort+"."+propertyIdPath]
 	if !exists {
 		return 0, fmt.Errorf("property path '%s' not found in submodel '%s'", propertyIdPath, submodelIdShort)
 	}
-
 	return prop.ValueType(), nil
+}
+
+// GetPropertyValue safely reads a property's current raw string value,
+// synchronized against concurrent updates to the same submodel.
+func (c *AASCore) GetPropertyValue(submodelIdShort, propertyIdPath string) (*string, error) {
+	prop, exists := c.propertyMap[submodelIdShort+"."+propertyIdPath]
+	if !exists {
+		return nil, fmt.Errorf("property path '%s' not found in submodel '%s'", propertyIdPath, submodelIdShort)
+	}
+
+	lock := c.submodelLock(submodelIdShort)
+	lock.RLock()
+	defer lock.RUnlock()
+	return prop.Value(), nil
+}
+
+// SerializeGivenSubmodel returns the AAS-compliant JSON-able representation
+// of an already-resolved submodel (e.g. from GetSubmodel/GetSubmodelByID),
+// synchronized against concurrent property updates within it.
+func (c *AASCore) SerializeGivenSubmodel(sm aastypes.ISubmodel) (any, error) {
+	return c.serializeLocked(idShortOf(sm), sm)
+}
+
+// SerializeAllSubmodels returns the JSON-able representation of every
+// submodel. Each is serialized under its own submodel lock rather than one
+// lock for the whole call, so a busy submodel can't stall the encoding of
+// the others. Submodels that fail to serialize are logged and skipped.
+func (c *AASCore) SerializeAllSubmodels() []any {
+	submodels := c.GetAllSubmodels()
+	result := make([]any, 0, len(submodels))
+
+	for _, sm := range submodels {
+		jsonable, err := c.serializeLocked(idShortOf(sm), sm)
+		if err != nil {
+			slog.Error("Failed to serialize submodel", "submodel", idShortOf(sm), "error", err)
+			continue
+		}
+		result = append(result, jsonable)
+	}
+	return result
+}
+
+// serializeLocked holds the submodel's lock for the full duration of
+// encoding, so the JSON snapshot can't observe a value mid-update.
+func (c *AASCore) serializeLocked(idShort string, sm aastypes.ISubmodel) (any, error) {
+	lock := c.submodelLock(idShort)
+	lock.RLock()
+	defer lock.RUnlock()
+	return jsonization.ToJsonable(sm)
+}
+
+// submodelLock returns the lock guarding property values for the given
+// submodel. Every submodel present at load time has one (see
+// buildSubmodelLocks); the fresh fallback only guards against a caller
+// passing an idShort that doesn't exist in the model.
+func (c *AASCore) submodelLock(idShort string) *sync.RWMutex {
+	if lock, ok := c.submodelLocks[idShort]; ok {
+		return lock
+	}
+	return &sync.RWMutex{}
+}
+
+// idShortOf safely extracts a submodel's idShort, defaulting to "" if unset.
+func idShortOf(sm aastypes.ISubmodel) string {
+	if sm.IDShort() == nil {
+		return ""
+	}
+	return *sm.IDShort()
 }
 
 // Start begins processing incoming AAS update events.
@@ -134,16 +203,16 @@ func (c *AASCore) Start(ctx context.Context, inChan <-chan *AASUpdateEvent) {
 
 // Subscribe creates a new subscription channel for AAS update events.
 func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error) {
-	c.modelMutex.Lock()
-	defer c.modelMutex.Unlock()
-
 	subChan := make(chan *AASUpdateEvent, 1000)
+
+	c.subsMu.Lock()
 	c.subscribers = append(c.subscribers, subChan)
+	c.subsMu.Unlock()
 
 	go func() {
 		<-ctx.Done()
-		c.modelMutex.Lock()
-		defer c.modelMutex.Unlock()
+		c.subsMu.Lock()
+		defer c.subsMu.Unlock()
 
 		for i, ch := range c.subscribers {
 			if ch == subChan {
@@ -161,32 +230,37 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any, timestamp time.Time) {
 	cacheKey := submodelIdShort + "." + propertyIdPath
 
-	// Fast O(1) Lookup (Read Lock)
-	c.modelMutex.RLock()
 	prop, exists := c.propertyMap[cacheKey]
-	c.modelMutex.RUnlock()
-
 	if !exists {
 		return // Property not found in model
 	}
 
 	strValue := fastAnyToString(value)
 
-	c.modelMutex.Lock()
+	// Only the submodel this property belongs to is locked, so writes to
+	// other submodels - and reads of them, e.g. concurrent HTTP pulls -
+	// proceed unimpeded instead of queuing behind a single model-wide lock.
+	lock := c.submodelLock(submodelIdShort)
+	lock.Lock()
 	instrumentation.Record("CORE", propertyIdPath, timestamp)
 	prop.SetValue(&strValue)
-	c.modelMutex.Unlock()
+	lock.Unlock()
 
-	updateEvent := &AASUpdateEvent{
+	c.broadcast(&AASUpdateEvent{
 		SubmodelID: submodelIdShort,
 		PropertyID: propertyIdPath,
 		Value:      value,
 		Timestamp:  timestamp,
-	}
+	})
+}
 
-	// Broadcast (Read Lock only protects the subscribers slice)
-	c.modelMutex.RLock()
-	defer c.modelMutex.RUnlock()
+// broadcast fans updateEvent out to all subscribers. Sends are
+// non-blocking: a slow/stuck exporter never stalls ingestion or other
+// exporters, at the cost of silently dropping updates for that subscriber.
+func (c *AASCore) broadcast(updateEvent *AASUpdateEvent) {
+	c.subsMu.Lock()
+	defer c.subsMu.Unlock()
+
 	for _, subChan := range c.subscribers {
 		select {
 		case subChan <- updateEvent:

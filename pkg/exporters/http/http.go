@@ -13,8 +13,6 @@ import (
 	"time"
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
-
-	"github.com/aas-core-works/aas-core3.0-golang/jsonization"
 )
 
 // HttpExporter implements the "pull" model for serving AAS data over HTTP.
@@ -134,18 +132,9 @@ func basicAuthMiddleware(user, pass string, next http.Handler) http.Handler {
 
 // handleGetAllSubmodels returns a list of all available submodels.
 func (h *HttpExporter) handleGetAllSubmodels(w http.ResponseWriter, r *http.Request) {
-	submodels := h.core.GetAllSubmodels()
-
-	// AAS compliant serialization
-	var response []any
-	for _, sm := range submodels {
-		jsonable, err := jsonization.ToJsonable(sm)
-		if err != nil {
-			slog.Error("Failed to serialize submodel", "error", err)
-			continue
-		}
-		response = append(response, jsonable)
-	}
+	// AASCore synchronizes each submodel's serialization against concurrent
+	// property updates internally, so the result here is never a torn read.
+	response := h.core.SerializeAllSubmodels()
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -185,8 +174,9 @@ func (h *HttpExporter) handleGetSubmodelByID(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Serialize using the AAS library
-	jsonable, err := jsonization.ToJsonable(sm)
+	// AASCore synchronizes serialization against concurrent property
+	// updates to this submodel internally, so this is never a torn read.
+	jsonable, err := h.core.SerializeGivenSubmodel(sm)
 	if err != nil {
 		slog.Error("Failed to serialize Submodel", "id", searchID, "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

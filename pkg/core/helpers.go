@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"sync"
 
 	aastypes "github.com/aas-core-works/aas-core3.0-golang/types"
 )
@@ -78,6 +79,19 @@ func buildPropertyMap(env aastypes.IEnvironment) map[string]aastypes.IProperty {
 		flattenProperties(m, sm.SubmodelElements(), smID, "")
 	}
 	return m
+}
+
+// buildSubmodelLocks creates one lock per submodel so that property value
+// reads/writes in independent submodels never contend with each other.
+func buildSubmodelLocks(env aastypes.IEnvironment) map[string]*sync.RWMutex {
+	locks := make(map[string]*sync.RWMutex)
+	for _, sm := range env.Submodels() {
+		if sm.IDShort() == nil {
+			continue
+		}
+		locks[*sm.IDShort()] = &sync.RWMutex{}
+	}
+	return locks
 }
 
 // flattenProperties recursively flattens the submodel elements into a map for O(1) lookups.

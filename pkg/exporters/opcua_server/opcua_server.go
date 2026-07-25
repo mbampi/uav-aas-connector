@@ -170,9 +170,13 @@ func (e *Exporter) buildAddressSpace() error {
 			nodeIDPath := fmt.Sprintf("%s/%s", smID, strings.ReplaceAll(path, ".", "/"))
 			varNodeID := ua.NodeIDString{NamespaceIndex: nsIndex, ID: nodeIDPath}
 
+			// Read via the core rather than prop.Value() directly: the AAS
+			// library's Property has no internal synchronization, and by
+			// this point ingestion may already be concurrently calling
+			// SetValue() on the same property.
 			initialVal := ""
-			if prop.Value() != nil {
-				initialVal = *prop.Value()
+			if v, err := e.core.GetPropertyValue(smID, path); err == nil && v != nil {
+				initialVal = *v
 			}
 			vt := prop.ValueType()
 			val, _ := e.convertValue(initialVal, vt)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 	"uav-aas-connector/pkg/config"
@@ -228,6 +229,58 @@ func TestUpdateLogic_Integration(t *testing.T) {
 			// The successful broadcast check above is a strong indicator that updateModel succeeded.
 		})
 	}
+}
+
+// TestConcurrentUpdatesAcrossSubmodels_NoRace exercises the per-submodel
+// locking under `go test -race`: two submodels are hammered with updates
+// concurrently while readers repeatedly serialize the whole model and read
+// individual property values. It doesn't assert on timing/throughput, only
+// that independent submodels can be written and read concurrently without
+// the race detector finding an unsynchronized access to a Property's value
+// (the AAS library itself has no locking of its own).
+func TestConcurrentUpdatesAcrossSubmodels_NoRace(t *testing.T) {
+	filePath := createTempJSONFile(t, validAASJson)
+	c, err := NewAASCore(config.AASConfig{FilePath: filePath})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	inChan := make(chan *AASUpdateEvent, 100)
+	go c.Start(ctx, inChan)
+
+	const iterations = 200
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			inChan <- &AASUpdateEvent{SubmodelID: "Identification", PropertyID: "Manufacturer", Value: "Drone Corp", Timestamp: time.Now()}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			inChan <- &AASUpdateEvent{SubmodelID: "Status", PropertyID: "Battery.Voltage", Value: float64(i), Timestamp: time.Now()}
+		}
+	}()
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = c.SerializeAllSubmodels()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_, _ = c.GetPropertyValue("Status", "Battery.Voltage")
+		}
+	}()
+
+	wg.Wait()
 }
 
 func TestGetElementDataType(t *testing.T) {
