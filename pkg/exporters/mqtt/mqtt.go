@@ -22,8 +22,8 @@ import (
 type Exporter struct {
 	client      mqtt.Client
 	topicPrefix string
-	taskChan    chan publishTask // Channel to feed the worker pool
-	wg          sync.WaitGroup   // WaitGroup for graceful shutdown
+	shards      []chan *core.AASUpdateEvent // per-worker queues; one worker per shard
+	wg          sync.WaitGroup             // WaitGroup for graceful shutdown
 }
 
 // Payload represents a standard "Time-stamped Value" for telemetry.
@@ -32,12 +32,15 @@ type Payload struct {
 	Timestamp string `json:"timestamp"` // ISO 8601
 }
 
-// publishTask holds the token and metadata for the worker pool
-type publishTask struct {
-	token      mqtt.Token
-	propertyID string
-	timestamp  time.Time
-}
+const (
+	// numWorkers is the number of publish workers (and shards). Updates for a
+	// given property always route to the same shard, so a property's messages
+	// are published in order while different properties publish concurrently.
+	numWorkers = 50
+	// shardBufferSize bounds each shard's queue; when full, updates for that
+	// shard are dropped rather than blocking the ingest loop.
+	shardBufferSize = 256
+)
 
 func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 	opts := mqtt.NewClientOptions()
@@ -90,10 +93,15 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 	// Remove trailing slash to be clean
 	prefix = strings.TrimSuffix(prefix, "/")
 
+	shards := make([]chan *core.AASUpdateEvent, numWorkers)
+	for i := range shards {
+		shards[i] = make(chan *core.AASUpdateEvent, shardBufferSize)
+	}
+
 	return &Exporter{
 		client:      client,
 		topicPrefix: prefix,
-		taskChan:    make(chan publishTask, 10000), // Initialize with a buffer
+		shards:      shards,
 	}, nil
 }
 
@@ -115,13 +123,14 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 		return fmt.Errorf("failed to connect to MQTT broker: %w", token.Error())
 	}
 
-	const numWorkers = 50
-	for i := 0; i < numWorkers; i++ {
+	for i := range e.shards {
 		e.wg.Add(1)
-		go e.tokenWorker()
+		go e.worker(e.shards[i])
 	}
 
-	// Process event loop
+	// Ingest loop: route each event to its property's shard without blocking.
+	// The Marshal and (potentially blocking) Paho Publish now run in the
+	// workers, so a slow broker can never stall ingestion.
 	for {
 		select {
 		case <-ctx.Done():
@@ -130,19 +139,24 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			if !ok {
 				return nil
 			}
-			e.publish(event)
+			shard := e.shards[shardFor(event, len(e.shards))]
+			select {
+			case shard <- event:
+			default:
+				slog.Warn("MQTT worker pool saturated, dropping update", "property", event.PropertyID)
+			}
 		}
 	}
 }
 
 // Stop gracefully shuts down the exporter, waiting for all pending messages to be sent.
 func (e *Exporter) Stop() error {
-	// Close the task channel to signal workers to stop
-	if e.taskChan != nil {
-		close(e.taskChan)
+	// Close the shard channels to signal workers to drain and stop.
+	for _, shard := range e.shards {
+		close(shard)
 	}
 
-	// Wait for all workers to finish processing pending tokens
+	// Wait for all workers to finish publishing pending messages.
 	e.wg.Wait()
 
 	if e.client != nil && e.client.IsConnected() {
@@ -153,40 +167,48 @@ func (e *Exporter) Stop() error {
 	return nil
 }
 
-// tokenWorker processes publish tasks from the channel and waits for their completion.
-func (e *Exporter) tokenWorker() {
+// worker publishes events from a single shard. Because each property maps to
+// exactly one shard, a property's updates are published in order.
+func (e *Exporter) worker(shard <-chan *core.AASUpdateEvent) {
 	defer e.wg.Done()
-
-	// Read from the channel until it is closed
-	for task := range e.taskChan {
-		// WaitWithTimeout prevents infinite blocking if broker hangs
-		if task.token.WaitTimeout(2 * time.Second) {
-			if task.token.Error() != nil {
-				slog.Error("MQTT publish failed", "error", task.token.Error())
-			} else {
-				instrumentation.Record("MQTT_SENT", task.propertyID, task.timestamp)
-			}
-		}
+	for event := range shard {
+		e.publish(event)
 	}
 }
 
+// shardFor maps an event to a worker shard by hashing its property identity
+// (FNV-1a), so all updates for one property are handled by the same worker.
+func shardFor(event *core.AASUpdateEvent, n int) int {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	h := uint32(offset32)
+	for i := 0; i < len(event.SubmodelID); i++ {
+		h = (h ^ uint32(event.SubmodelID[i])) * prime32
+	}
+	for i := 0; i < len(event.PropertyID); i++ {
+		h = (h ^ uint32(event.PropertyID[i])) * prime32
+	}
+	return int(h % uint32(n))
+}
+
+// publish marshals and sends one event, then waits (bounded) for the broker
+// acknowledgment. It runs on a worker goroutine, so its cost and any Paho
+// backpressure never reach the ingest loop.
 func (e *Exporter) publish(event *core.AASUpdateEvent) {
 	// AAS TOPIC STANDARD (Common Pattern):
 	// <Prefix>/submodels/<Base64_SubmodelID>/elements/<IdShortPath>
-
 	smIDEncoded := base64.URLEncoding.EncodeToString([]byte(event.SubmodelID))
 	// PropertyID is usually an idShort path (e.g. "Position.Latitude"), which is safe for topics.
 	// We replace dots with slashes to make it a true MQTT hierarchy.
 	path := strings.ReplaceAll(event.PropertyID, ".", "/")
-
 	topic := fmt.Sprintf("%s/submodels/%s/elements/%s", e.topicPrefix, smIDEncoded, path)
 
-	// Create Payload
 	payload := Payload{
 		Value:     event.Value,
 		Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano),
 	}
-
 	data, err := json.Marshal(payload)
 	if err != nil {
 		slog.Error("MQTT error marshaling payload", "error", err)
@@ -196,19 +218,12 @@ func (e *Exporter) publish(event *core.AASUpdateEvent) {
 	instrumentation.Record("MQTT_SENDING", event.PropertyID, event.Timestamp)
 	token := e.client.Publish(topic, 0, false, data)
 
-	task := publishTask{
-		token:      token,
-		propertyID: event.PropertyID,
-		timestamp:  event.Timestamp,
-	}
-
-	// Non-blocking send to the worker pool
-	select {
-	case e.taskChan <- task:
-		// Task successfully handed off to worker
-	default:
-		// Buffer is full. We drop the wait to prevent blocking the main thread.
-		// The message was still sent to the broker, we just won't log the "MQTT_SENT" confirmation.
-		slog.Warn("MQTT worker pool saturated, dropping publish acknowledgment wait", "property", event.PropertyID)
+	// WaitTimeout prevents indefinite blocking if the broker hangs.
+	if token.WaitTimeout(2 * time.Second) {
+		if err := token.Error(); err != nil {
+			slog.Error("MQTT publish failed", "error", err, "property", event.PropertyID)
+		} else {
+			instrumentation.Record("MQTT_SENT", event.PropertyID, event.Timestamp)
+		}
 	}
 }
