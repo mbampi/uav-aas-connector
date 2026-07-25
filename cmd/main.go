@@ -23,6 +23,7 @@ func main() {
 	cfg, err := config.LoadConfig("config/config.yaml")
 	if err != nil {
 		slog.Error("Failed to load config", "error", err)
+		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
