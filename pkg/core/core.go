@@ -207,7 +207,7 @@ func (c *AASCore) Start(ctx context.Context, inChan <-chan *AASUpdateEvent) {
 			if msg == nil {
 				continue
 			}
-			c.updateModel(msg.SubmodelID, msg.PropertyID, msg.Value, msg.Timestamp)
+			c.updateModel(msg)
 		}
 	}
 }
@@ -237,14 +237,17 @@ func (c *AASCore) Subscribe(ctx context.Context) (<-chan *AASUpdateEvent, error)
 	return subChan, nil
 }
 
-// updateModel updates the model with new data and notifies subscribers.
-func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any, timestamp time.Time) {
-	prop, exists := c.propertyMap[submodelIdShort+"."+propertyIdPath]
+// updateModel applies the event's new value to the model and notifies
+// subscribers. It forwards the same event pointer to broadcast rather than
+// allocating a new one; the event is never mutated after creation, so sharing
+// it across subscribers is safe.
+func (c *AASCore) updateModel(ev *AASUpdateEvent) {
+	prop, exists := c.propertyMap[ev.SubmodelID+"."+ev.PropertyID]
 	if !exists {
 		return // Property not found in model
 	}
 
-	instrumentation.Record("CORE", propertyIdPath, timestamp)
+	instrumentation.Record("CORE", ev.PropertyID, ev.Timestamp)
 
 	// In a push-only deployment nothing reads the model's string values, so
 	// skip the per-event string conversion and the submodel write-lock;
@@ -253,19 +256,14 @@ func (c *AASCore) updateModel(submodelIdShort, propertyIdPath string, value any,
 	// other submodels - and reads of them, e.g. concurrent HTTP pulls -
 	// proceed unimpeded instead of queuing behind a single model-wide lock.
 	if c.maintainStringState {
-		strValue := fastAnyToString(value)
-		lock := c.submodelLock(submodelIdShort)
+		strValue := fastAnyToString(ev.Value)
+		lock := c.submodelLock(ev.SubmodelID)
 		lock.Lock()
 		prop.SetValue(&strValue)
 		lock.Unlock()
 	}
 
-	c.broadcast(&AASUpdateEvent{
-		SubmodelID: submodelIdShort,
-		PropertyID: propertyIdPath,
-		Value:      value,
-		Timestamp:  timestamp,
-	})
+	c.broadcast(ev)
 }
 
 // broadcast fans updateEvent out to all subscribers. Sends are

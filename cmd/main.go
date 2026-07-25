@@ -15,11 +15,9 @@ import (
 	"uav-aas-connector/pkg/instrumentation" // Import the new package
 )
 
-// 1. Load config (using pkg/config).
-// 2. Create channels (rawChan, processedChan).
-// 3. Start Adapters, Core and Exporters as goroutines.
-// 4. Handle graceful shutdown on interrupt signal.
-
+// main wires the pipeline together: load config, then start the input adapter,
+// the AAS core, and the output exporters as supervised goroutines connected by
+// channels, and block until a shutdown signal arrives.
 func main() {
 	cfg, err := config.LoadConfig("config/config.yaml")
 	if err != nil {
