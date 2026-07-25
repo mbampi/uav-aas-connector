@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
@@ -84,6 +85,24 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 // sendQueueSize bounds the buffered send queue that absorbs network blips
 // before updates start being dropped.
 const sendQueueSize = 1000
+
+// Keepalive parameters. Without these, a half-open connection (peer dies
+// without sending a TCP RST - power loss, cable pull, NAT/firewall dropping the
+// flow) leaves stream.Send blocked until the OS TCP retransmit timeout, which
+// defaults to ~15 minutes on Linux. With client keepalive, gRPC pings an idle
+// transport and tears it down within keepaliveTime+keepaliveTimeout, so the
+// sender goroutine's Send fails fast and the reconnect loop takes over in
+// seconds instead of minutes.
+//
+// NOTE: keepaliveTime is below the gRPC server's default enforcement MinTime
+// (5m), so the ingest server must permit this cadence (keepalive.EnforcementPolicy
+// with MinTime <= keepaliveTime and PermitWithoutStream: true) or it will send
+// GOAWAY "too_many_pings". Both sides are part of this integration, so they are
+// configured together.
+const (
+	keepaliveTime    = 20 * time.Second
+	keepaliveTimeout = 5 * time.Second
+)
 
 // sendLoop owns the gRPC stream and reconnects with a fixed backoff. It runs on
 // its own goroutine so the blocking Send never touches the ingest loop. A gRPC
@@ -196,7 +215,14 @@ func (e *Exporter) dialOptions() ([]grpc.DialOption, error) {
 		transportCreds = insecure.NewCredentials()
 	}
 
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(transportCreds)}
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(transportCreds),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                keepaliveTime,
+			Timeout:             keepaliveTimeout,
+			PermitWithoutStream: true, // keep the long-lived conn probed even between stream reconnects
+		}),
+	}
 
 	if e.security.Username != "" {
 		opts = append(opts, grpc.WithPerRPCCredentials(basicAuthCreds{
