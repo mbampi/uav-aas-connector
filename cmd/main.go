@@ -39,10 +39,10 @@ func main() {
 	}
 	defer instrumentation.Close()
 
-	// Periodically surface events dropped under backpressure (core broadcast,
-	// adapter, and exporter queues). Independent of the latency-log file above,
-	// so drop visibility survives an instrumentation init failure.
-	go instrumentation.ReportDrops(ctx, instrumentation.DefaultDropReportInterval)
+	// Periodically surface events dropped or coalesced under backpressure (core
+	// broadcast, adapter, and exporter queues). Independent of the latency-log
+	// file above, so this visibility survives an instrumentation init failure.
+	go instrumentation.ReportBackpressure(ctx, instrumentation.DefaultBackpressureReportInterval)
 
 	// Start Input Adapter
 	rawChan := make(chan *core.AASUpdateEvent, 1000)

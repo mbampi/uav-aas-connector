@@ -14,6 +14,7 @@ import (
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
+	"uav-aas-connector/pkg/exporters/coalesce"
 	pb "uav-aas-connector/pkg/exporters/grpc/proto"
 	"uav-aas-connector/pkg/instrumentation"
 )
@@ -56,11 +57,13 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	e.client = pb.NewAASIngestClient(conn)
 
 	// Decouple ingestion from the network: a dedicated goroutine owns the
-	// stream and performs the (potentially blocking) Send, while this loop
-	// only drains inChan into a buffered queue. A slow or stuck network can no
-	// longer stall inChan and make the core drop updates for this exporter.
-	sendChan := make(chan *core.AASUpdateEvent, sendQueueSize)
-	go e.sendLoop(ctx, sendChan)
+	// stream and performs the (potentially blocking) Send, while this loop only
+	// feeds a coalescer. A slow or stuck network can no longer stall inChan and
+	// make the core drop updates for this exporter; instead, updates to the same
+	// property collapse to the latest one (bounded by property count) rather
+	// than the freshest values being dropped when a queue fills.
+	co := coalesce.New(instrumentation.CoalescedCounter("exporter.grpc"))
+	go e.sendLoop(ctx, co)
 
 	for {
 		select {
@@ -70,21 +73,10 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			if !ok {
 				return nil
 			}
-			select {
-			case sendChan <- event:
-			default:
-				// Network can't keep up and the buffer is full; count the loss
-				// (instrumentation.ReportDrops surfaces it periodically) instead
-				// of logging per-event.
-				e.drops.Inc()
-			}
+			co.Put(event) // never blocks, never drops the newest value
 		}
 	}
 }
-
-// sendQueueSize bounds the buffered send queue that absorbs network blips
-// before updates start being dropped.
-const sendQueueSize = 1000
 
 // Keepalive parameters. Without these, a half-open connection (peer dies
 // without sending a TCP RST - power loss, cable pull, NAT/firewall dropping the
@@ -107,13 +99,13 @@ const (
 // sendLoop owns the gRPC stream and reconnects with a fixed backoff. It runs on
 // its own goroutine so the blocking Send never touches the ingest loop. A gRPC
 // stream must only be sent on from a single goroutine, which this satisfies.
-func (e *Exporter) sendLoop(ctx context.Context, sendChan <-chan *core.AASUpdateEvent) {
+func (e *Exporter) sendLoop(ctx context.Context, co *coalesce.Coalescer) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			if err := e.streamAndSend(ctx, sendChan); err != nil {
+			if err := e.streamAndSend(ctx, co); err != nil {
 				slog.Error("gRPC stream error, retrying", "error", err)
 				select {
 				case <-ctx.Done():
@@ -125,9 +117,9 @@ func (e *Exporter) sendLoop(ctx context.Context, sendChan <-chan *core.AASUpdate
 	}
 }
 
-// streamAndSend opens a stream and forwards queued events until the stream
+// streamAndSend opens a stream and forwards coalesced events until the stream
 // fails (returning the error to trigger a reconnect) or the context ends.
-func (e *Exporter) streamAndSend(ctx context.Context, sendChan <-chan *core.AASUpdateEvent) error {
+func (e *Exporter) streamAndSend(ctx context.Context, co *coalesce.Coalescer) error {
 	stream, err := e.client.StreamUpdates(ctx)
 	if err != nil {
 		return err
@@ -136,22 +128,23 @@ func (e *Exporter) streamAndSend(ctx context.Context, sendChan <-chan *core.AASU
 	slog.Info("gRPC stream established")
 
 	for {
-		select {
-		case <-ctx.Done():
-			return stream.CloseSend()
+		batch := co.WaitDrain(ctx)
+		if batch == nil {
+			return stream.CloseSend() // context canceled
+		}
 
-		case event, ok := <-sendChan:
-			if !ok {
-				return stream.CloseSend()
-			}
-
+		for i, event := range batch {
 			req := buildRequest(event)
 
 			instrumentation.Record("GRPC_SENDING", event.PropertyID, event.Timestamp)
 
-			// Send to stream (blocking if network is backed up, but this runs
-			// on the sender goroutine, so ingestion is unaffected).
+			// Send to stream (blocking if network is backed up, but this runs on
+			// the sender goroutine, so ingestion is unaffected).
 			if err := stream.Send(req); err != nil {
+				// The events drained but not yet sent are lost on this broken
+				// stream (they'll be superseded by fresh values after the ~1s
+				// reconnect); count them as real drops.
+				e.drops.Add(uint64(len(batch) - i))
 				return err // Return error to trigger reconnect loop
 			}
 

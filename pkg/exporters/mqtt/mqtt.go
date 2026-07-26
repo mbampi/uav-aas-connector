@@ -14,6 +14,7 @@ import (
 
 	"uav-aas-connector/pkg/config"
 	"uav-aas-connector/pkg/core"
+	"uav-aas-connector/pkg/exporters/coalesce"
 	"uav-aas-connector/pkg/instrumentation"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -24,9 +25,8 @@ import (
 type Exporter struct {
 	client      mqtt.Client
 	topicPrefix string
-	shards      []chan *core.AASUpdateEvent // per-worker queues; one worker per shard
-	wg          sync.WaitGroup             // WaitGroup for graceful shutdown
-	drops       *instrumentation.Counter   // events dropped because a shard was full
+	shards      []*coalesce.Coalescer // per-worker coalescers; one worker per shard
+	wg          sync.WaitGroup        // WaitGroup for graceful shutdown
 }
 
 const (
@@ -34,9 +34,6 @@ const (
 	// given property always route to the same shard, so a property's messages
 	// are published in order while different properties publish concurrently.
 	numWorkers = 50
-	// shardBufferSize bounds each shard's queue; when full, updates for that
-	// shard are dropped rather than blocking the ingest loop.
-	shardBufferSize = 256
 )
 
 func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
@@ -90,16 +87,19 @@ func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
 	// Remove trailing slash to be clean
 	prefix = strings.TrimSuffix(prefix, "/")
 
-	shards := make([]chan *core.AASUpdateEvent, numWorkers)
+	// One coalescer per shard, all sharing the same coalesced-event counter.
+	// When the broker lags, updates to a property collapse to the latest value
+	// instead of the freshest being dropped once a queue fills.
+	coalesced := instrumentation.CoalescedCounter("exporter.mqtt")
+	shards := make([]*coalesce.Coalescer, numWorkers)
 	for i := range shards {
-		shards[i] = make(chan *core.AASUpdateEvent, shardBufferSize)
+		shards[i] = coalesce.New(coalesced)
 	}
 
 	return &Exporter{
 		client:      client,
 		topicPrefix: prefix,
 		shards:      shards,
-		drops:       instrumentation.DropCounter("exporter.mqtt"),
 	}, nil
 }
 
@@ -123,12 +123,14 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 
 	for i := range e.shards {
 		e.wg.Add(1)
-		go e.worker(e.shards[i])
+		go e.worker(ctx, e.shards[i])
 	}
 
 	// Ingest loop: route each event to its property's shard without blocking.
-	// The Marshal and (potentially blocking) Paho Publish now run in the
-	// workers, so a slow broker can never stall ingestion.
+	// Marshal and the (potentially blocking) Paho Publish run in the workers, so
+	// a slow broker never stalls ingestion; when the broker lags, repeated
+	// updates to a property collapse to the latest one (see Coalescer) instead
+	// of the newest value being dropped.
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,26 +139,15 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 			if !ok {
 				return nil
 			}
-			shard := e.shards[shardFor(event, len(e.shards))]
-			select {
-			case shard <- event:
-			default:
-				// Broker/worker can't keep up and this shard is full; count the
-				// loss (instrumentation.ReportDrops surfaces it periodically)
-				// instead of logging per-event.
-				e.drops.Inc()
-			}
+			e.shards[shardFor(event, len(e.shards))].Put(event)
 		}
 	}
 }
 
-// Stop gracefully shuts down the exporter, waiting for all pending messages to be sent.
+// Stop waits for the publish workers to finish, then disconnects. The workers
+// exit when the context passed to Start is canceled, so Stop must be called
+// after that cancellation (it would otherwise block on the WaitGroup).
 func (e *Exporter) Stop() error {
-	// Close the shard channels to signal workers to drain and stop.
-	for _, shard := range e.shards {
-		close(shard)
-	}
-
 	// Wait for all workers to finish publishing pending messages.
 	e.wg.Wait()
 
@@ -168,12 +159,19 @@ func (e *Exporter) Stop() error {
 	return nil
 }
 
-// worker publishes events from a single shard. Because each property maps to
-// exactly one shard, a property's updates are published in order.
-func (e *Exporter) worker(shard <-chan *core.AASUpdateEvent) {
+// worker publishes events from a single shard's coalescer. Because each property
+// maps to exactly one shard and WaitDrain calls are sequential, a property's
+// updates are published in order. It exits when ctx is canceled.
+func (e *Exporter) worker(ctx context.Context, co *coalesce.Coalescer) {
 	defer e.wg.Done()
-	for event := range shard {
-		e.publish(event)
+	for {
+		batch := co.WaitDrain(ctx)
+		if batch == nil {
+			return // context canceled
+		}
+		for _, event := range batch {
+			e.publish(event)
+		}
 	}
 }
 

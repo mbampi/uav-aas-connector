@@ -71,31 +71,34 @@ func TestDropSnapshot_SortedAndIncludesCounts(t *testing.T) {
 	}
 }
 
-// TestReportDrops_LogsNewDrops verifies the reporter actually surfaces a drop:
-// a recorded loss produces a log line naming the drop point within one interval.
-// This is the whole point of the feature — the loss is observable, not silent.
-func TestReportDrops_LogsNewDrops(t *testing.T) {
+// TestReportBackpressure_LogsDropsAndCoalesces verifies the reporter actually
+// surfaces both outcomes: a recorded drop and a recorded coalesce each produce a
+// log line naming the point within one interval. This is the whole point of the
+// feature — backpressure is observable, not silent.
+func TestReportBackpressure_LogsDropsAndCoalesces(t *testing.T) {
 	var buf syncBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	defer slog.SetDefault(prev)
 
-	DropCounter("test.report.point").Add(3)
+	DropCounter("test.report.dropped").Add(3)
+	CoalescedCounter("test.report.coalesced").Add(7)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		ReportDrops(ctx, 5*time.Millisecond)
+		ReportBackpressure(ctx, 5*time.Millisecond)
 		close(done)
 	}()
 
 	deadline := time.After(2 * time.Second)
-	for !strings.Contains(buf.String(), "test.report.point") {
+	for !strings.Contains(buf.String(), "test.report.dropped") ||
+		!strings.Contains(buf.String(), "test.report.coalesced") {
 		select {
 		case <-deadline:
 			cancel()
 			<-done
-			t.Fatalf("reporter never logged the drop; output=%q", buf.String())
+			t.Fatalf("reporter never logged both points; output=%q", buf.String())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
@@ -107,7 +110,10 @@ func TestReportDrops_LogsNewDrops(t *testing.T) {
 	if !strings.Contains(out, "events dropped under backpressure") {
 		t.Errorf("missing drop warning in output: %q", out)
 	}
-	if !strings.Contains(out, "total=3") {
-		t.Errorf("expected total=3 in output: %q", out)
+	if !strings.Contains(out, "events coalesced under backpressure") {
+		t.Errorf("missing coalesce notice in output: %q", out)
+	}
+	if !strings.Contains(out, "total=3") || !strings.Contains(out, "total=7") {
+		t.Errorf("expected totals 3 and 7 in output: %q", out)
 	}
 }
