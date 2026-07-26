@@ -135,14 +135,23 @@ func loadMapping(path string) (*config.MappingConfig, error) {
 func (a *MavlinkAdapter) Start(ctx context.Context, outChan chan<- *core.AASUpdateEvent) error {
 	a.outChan = outChan
 	slog.Info("Starting Mavlink adapter", "address", a.address)
+	defer a.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			// Context was canceled, initiate shutdown
-			return a.Stop()
+			return nil
 
-		case evt := <-a.node.Events():
+		case evt, ok := <-a.node.Events():
+			if !ok {
+				slog.Warn("Mavlink events channel closed")
+				return fmt.Errorf("mavlink events channel closed")
+			}
+			if evt == nil {
+				continue
+			}
+
 			// Handle events from the gomavlib node
 			switch e := evt.(type) {
 			case *gomavlib.EventFrame:
@@ -163,6 +172,7 @@ func (a *MavlinkAdapter) Stop() error {
 	slog.Info("Stopping Mavlink adapter")
 	if a.node != nil {
 		a.node.Close()
+		a.node = nil
 	}
 	return nil
 }

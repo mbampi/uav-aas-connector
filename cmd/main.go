@@ -49,10 +49,13 @@ func main() {
 
 	// Validate the adapter config up front so a broken config fails fast
 	// instead of being retried forever by the supervisor below.
-	if _, err := adapters.NewInputAdapter(cfg.InputAdapter); err != nil {
+	valAdapter, err := adapters.NewInputAdapter(cfg.InputAdapter)
+	if err != nil {
 		slog.Error("Failed to create adapter", "error", err)
 		os.Exit(1)
 	}
+	_ = valAdapter.Stop()
+
 	go runSupervised(ctx, "adapter:"+cfg.InputAdapter.Type, func(attemptCtx context.Context) error {
 		adapter, err := adapters.NewInputAdapter(cfg.InputAdapter)
 		if err != nil {
