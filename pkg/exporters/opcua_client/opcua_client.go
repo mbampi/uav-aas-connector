@@ -18,13 +18,26 @@ import (
 	"github.com/gopcua/opcua/ua"
 )
 
+// defaultMaxConcurrentWrites bounds how many OPC UA WriteRequests can be
+// in flight at once. The gopcua secure channel already multiplexes concurrent
+// requests safely (each gets its own request ID and response handler), so
+// this is purely a backpressure knob against the remote server, not a
+// correctness requirement.
+const defaultMaxConcurrentWrites = 4
+
 // Exporter implements an OPC UA output exporter for the UAV AAS Connector.
 type Exporter struct {
 	client   *opcua.Client
 	core     *core.AASCore
 	endpoint string
 
-	namespace   uint16
+	namespace uint16
+
+	// typeCache and nodeIDCache are read/written by every in-flight write
+	// goroutine (see networkWorker), so unlike a single-writer cache they
+	// need their own lock rather than relying on the pendingMu/networkWorker
+	// serialization that used to make this safe.
+	cacheMu     sync.RWMutex
 	typeCache   map[string]aastypes.DataTypeDefXSD
 	nodeIDCache map[string]*ua.NodeID
 
@@ -32,10 +45,26 @@ type Exporter struct {
 	enableDedup bool
 	maxAge      time.Duration
 
+	// maxConcurrentWrites bounds the number of WriteRequests in flight at
+	// once (see networkWorker). A single blocking write serializes every
+	// batch behind whatever the current round-trip happens to take, so one
+	// slow write inflates the queueing latency of everything queued behind
+	// it; pipelining a few writes hides that tail instead of paying it once
+	// per batch.
+	maxConcurrentWrites int
+
 	// Decoupling components
 	pendingUpdates map[string]*core.AASUpdateEvent
 	pendingMu      sync.Mutex
 	triggerChan    chan struct{} // Used to wake up the network worker instantly
+
+	// reconnectMu serializes reconnection attempts. connGen increments each
+	// time a reconnect succeeds, so concurrent write goroutines that fail
+	// against the same broken connection trigger exactly one reconnect
+	// instead of a stampede: a goroutine only reconnects if connGen hasn't
+	// already moved past the generation it observed when its write failed.
+	reconnectMu sync.Mutex
+	connGen     uint64
 
 	// drops counts events discarded when a batch is abandoned after a failed
 	// write + reconnect + retry.
@@ -66,18 +95,24 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 
 	maxAge := time.Duration(cfg.MaxAgeSeconds * float64(time.Second))
 
+	maxConcurrentWrites := cfg.MaxConcurrentWrites
+	if maxConcurrentWrites <= 0 {
+		maxConcurrentWrites = defaultMaxConcurrentWrites
+	}
+
 	return &Exporter{
-		client:         c,
-		core:           aasCore,
-		endpoint:       endpoint,
-		namespace:      ns,
-		typeCache:      make(map[string]aastypes.DataTypeDefXSD),
-		nodeIDCache:    make(map[string]*ua.NodeID),
-		enableDedup:    cfg.EnableDeduplication,
-		maxAge:         maxAge,
-		pendingUpdates: make(map[string]*core.AASUpdateEvent),
-		triggerChan:    make(chan struct{}, 1), // Buffer of 1 ensures non-blocking triggers
-		drops:          instrumentation.DropCounter("exporter.opcua_client"),
+		client:              c,
+		core:                aasCore,
+		endpoint:            endpoint,
+		namespace:           ns,
+		typeCache:           make(map[string]aastypes.DataTypeDefXSD),
+		nodeIDCache:         make(map[string]*ua.NodeID),
+		enableDedup:         cfg.EnableDeduplication,
+		maxAge:              maxAge,
+		maxConcurrentWrites: maxConcurrentWrites,
+		pendingUpdates:      make(map[string]*core.AASUpdateEvent),
+		triggerChan:         make(chan struct{}, 1), // Buffer of 1 ensures non-blocking triggers
+		drops:               instrumentation.DropCounter("exporter.opcua_client"),
 	}, nil
 }
 
@@ -131,7 +166,18 @@ func (e *Exporter) Stop() error {
 }
 
 // networkWorker handles OPC UA writes. It protects the ingestion loop from network latency.
+//
+// Batches are dispatched to a bounded pool of goroutines rather than sent
+// one-at-a-time: a single blocking client.Write call serializes every batch
+// behind whatever round-trip time the current write happens to hit, so one
+// slow write (network jitter, a busy remote server) inflates the queueing
+// latency of every batch formed while it's in flight. Pipelining a few
+// writes concurrently hides that tail instead of paying it once per batch.
 func (e *Exporter) networkWorker(ctx context.Context) {
+	sem := make(chan struct{}, e.maxConcurrentWrites)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -160,40 +206,77 @@ func (e *Exporter) networkWorker(ctx context.Context) {
 
 			// 2. Apply TTL (Deduplication is already handled implicitly by the map!)
 			filteredBatch := e.filterBatch(batch)
-
-			// 3. Send over the network
-			if len(filteredBatch) > 0 {
-				if err := e.writeBatch(ctx, filteredBatch); err != nil {
-					slog.Error("OPCUA batch failed, triggering session recovery", "error", err)
-
-					if reconnErr := e.reconnect(ctx); reconnErr != nil {
-						return
-					}
-
-					// Retry after reconnect
-					if err := e.writeBatch(ctx, filteredBatch); err != nil {
-						e.drops.Add(uint64(len(filteredBatch)))
-						slog.Error("OPCUA batch retry failed, dropping batch", "error", err, "dropped", len(filteredBatch))
-					}
-				}
+			if len(filteredBatch) == 0 {
+				continue
 			}
+
+			// 3. Send over the network on a bounded pool of goroutines so
+			// this dispatch loop can keep pulling the next batch off
+			// pendingUpdates instead of blocking on the current write.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			wg.Add(1)
+			go func(fb []*core.AASUpdateEvent) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				e.sendBatch(ctx, fb)
+			}(filteredBatch)
 		}
 	}
 }
 
+// sendBatch writes one batch, retrying once after a session recovery if the
+// first attempt fails. Safe to run concurrently with other sendBatch calls:
+// reconnection is de-duplicated via connGen (see reconnectIfCurrent) so a
+// burst of concurrent failures against the same broken connection triggers
+// exactly one reconnect.
+func (e *Exporter) sendBatch(ctx context.Context, batch []*core.AASUpdateEvent) {
+	gen := e.connGeneration()
+
+	writeErr := e.writeBatch(ctx, batch)
+	if writeErr == nil {
+		return
+	}
+	slog.Error("OPCUA batch failed, triggering session recovery", "error", writeErr)
+
+	if err := e.reconnectIfCurrent(ctx, gen); err != nil {
+		e.drops.Add(uint64(len(batch)))
+		slog.Error("OPCUA session recovery failed, dropping batch", "error", err, "dropped", len(batch))
+		return
+	}
+
+	if err := e.writeBatch(ctx, batch); err != nil {
+		e.drops.Add(uint64(len(batch)))
+		slog.Error("OPCUA batch retry failed, dropping batch", "error", err, "dropped", len(batch))
+	}
+}
+
 // prepareWriteValue creates the OPC UA write structure but does not send it.
+// May run concurrently with other prepareWriteValue calls (see
+// networkWorker), so typeCache/nodeIDCache reads and writes go through
+// cacheMu rather than the plain map access this had when a single goroutine
+// owned them exclusively.
 func (e *Exporter) prepareWriteValue(event *core.AASUpdateEvent) (*ua.WriteValue, error) {
 	cacheKey := event.SubmodelID + "." + event.PropertyID
 
+	e.cacheMu.RLock()
+	dataType, typeOK := e.typeCache[cacheKey]
+	nodeID, nodeOK := e.nodeIDCache[cacheKey]
+	e.cacheMu.RUnlock()
+
 	// 1. Check Cache for DataType
-	dataType, ok := e.typeCache[cacheKey]
-	if !ok {
+	if !typeOK {
 		var err error
 		dataType, err = e.core.GetElementDataType(event.SubmodelID, event.PropertyID)
 		if err != nil {
 			return nil, fmt.Errorf("AAS definition not found: %v", err)
 		}
+		e.cacheMu.Lock()
 		e.typeCache[cacheKey] = dataType
+		e.cacheMu.Unlock()
 	}
 
 	// 2. Convert Value
@@ -203,10 +286,11 @@ func (e *Exporter) prepareWriteValue(event *core.AASUpdateEvent) (*ua.WriteValue
 	}
 
 	// 3. Check Cache for NodeID
-	nodeID, ok := e.nodeIDCache[cacheKey]
-	if !ok {
+	if !nodeOK {
 		nodeID = e.generateNodeID(event.SubmodelID, event.PropertyID)
+		e.cacheMu.Lock()
 		e.nodeIDCache[cacheKey] = nodeID
+		e.cacheMu.Unlock()
 	}
 
 	// 4. Return the structure instead of sending
@@ -550,8 +634,39 @@ func clientSecurityOptions(cfg config.SecurityConfig) ([]opcua.Option, error) {
 	return opts, nil
 }
 
+// connGeneration returns the current connection generation, incremented on
+// every successful reconnect (see reconnectIfCurrent).
+func (e *Exporter) connGeneration() uint64 {
+	e.reconnectMu.Lock()
+	defer e.reconnectMu.Unlock()
+	return e.connGen
+}
+
+// reconnectIfCurrent reconnects unless another write goroutine already
+// recovered the connection since observedGen was captured, so a burst of
+// concurrent write failures against the same broken connection triggers
+// exactly one reconnect instead of a stampede. Callers pass the generation
+// they observed via connGeneration() before their write failed.
+func (e *Exporter) reconnectIfCurrent(ctx context.Context, observedGen uint64) error {
+	e.reconnectMu.Lock()
+	defer e.reconnectMu.Unlock()
+
+	if e.connGen != observedGen {
+		// Someone else already reconnected after our failure was observed.
+		return nil
+	}
+
+	if err := e.reconnect(ctx); err != nil {
+		return err
+	}
+	e.connGen++
+	return nil
+}
+
 // reconnect cleanly closes broken sessions, flushes server caches, and attempts
-// to re-establish the OPC UA connection with exponential backoff.
+// to re-establish the OPC UA connection with exponential backoff. Callers
+// must hold reconnectMu (see reconnectIfCurrent) except during the initial
+// connect in Start, before any concurrent writers exist.
 func (e *Exporter) reconnect(ctx context.Context) error {
 	slog.Warn("OPCUA session interrupted, initiating reconnection loop", "endpoint", e.endpoint)
 
@@ -561,7 +676,9 @@ func (e *Exporter) reconnect(ctx context.Context) error {
 	}
 
 	// 2. Flush cached Node IDs (server restart may invalidate session node references)
+	e.cacheMu.Lock()
 	e.nodeIDCache = make(map[string]*ua.NodeID)
+	e.cacheMu.Unlock()
 
 	// 3. Reconnection loop with capped exponential backoff
 	backoff := 1 * time.Second

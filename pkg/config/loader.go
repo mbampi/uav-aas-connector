@@ -44,6 +44,7 @@ type ExporterConfig struct {
 	// Performance and Resiliency Flags
 	EnableDeduplication bool    `yaml:"enableDeduplication,omitempty"` // Keeps only the latest value per property in a batch
 	MaxAgeSeconds       float64 `yaml:"maxAgeSeconds,omitempty"`       // Drops messages older than this (0 means disabled)
+	MaxConcurrentWrites int     `yaml:"maxConcurrentWrites,omitempty"` // opcua_client: max in-flight Write requests (0 uses the exporter's default)
 
 	// Transport security and authentication (see SecurityConfig).
 	Security SecurityConfig `yaml:"security,omitempty"`
