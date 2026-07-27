@@ -11,12 +11,12 @@ adapter:
   # address: "/dev/ttyAMA0"
   # baudrate: 921600
   # - UDP Connection:
-  # connection: "udp"
-  # address: "0.0.0.0:14550"
+  connection: "udp"
+  address: "0.0.0.0:14550"
   # - Radio Connection:
-  connection: "serial"
-  address: "/dev/ttyUSB0"
-  baudrate: 57600
+  # connection: "serial"
+  # address: "/dev/ttyUSB0"
+  # baudrate: 57600
 
 exporters:
   dummy:
@@ -32,7 +32,10 @@ exporters:
     type: "opcua_client"
     enabled: true
     port: 4841
-    host: "10.0.0.110" # 0.0.0.0 for local testing
+    host: "192.168.0.3" # 0.0.0.0 for local testing
+    enableDeduplication: false
+    maxConcurrentWrites: 2
+    maxAgeSeconds: 0
     # Transport security is opt-in and off by default (matches previous
     # behavior: SecurityMode=None, anonymous auth). To harden for a real
     # deployment:
@@ -43,12 +46,12 @@ exporters:
     #   username: "uav-connector"
     #   password: "change-me"
   
-  mqtt_broker:
+  mqtt:
     type: mqtt
     enabled: false
-    host: "tcp://localhost:1883"
-    client_id: "uav-connector-01"
-    topic_prefix: "aas/uav-1"
+    host: "tcp://192.168.0.3:1883"
+    clientID: "uav-connector-01"
+    topicPrefix: "aas/uav-1"
     # security:
     #   tlsEnabled: true          # host must then use ssl:// (or tls:///mqtts://)
     #   caFile: "pki/broker-ca.pem"
