@@ -8,7 +8,7 @@ from datetime import datetime
 # --- Configuration ---
 # Container to monitor
 CONTAINER_NAME = os.getenv("TARGET_CONTAINER", "uav-aas-connector")
-DURATION_SEC = int(os.getenv("DURATION_SEC", 660))
+DURATION_SEC = int(os.getenv("DURATION_SEC", 1020)) # 17 min = 1020 sec
 INTERVAL_SEC = float(os.getenv("INTERVAL_SEC", 0.5))
 
 # Output setup
@@ -35,6 +35,28 @@ except Exception as e:
 
 strTime = datetime.now().strftime("%Y%m%d_%H%M%S")
 filename = os.path.join(OUTPUT_DIR, f'{CONTAINER_NAME}_{strTime}.csv')
+
+def calculate_mem_usage_no_cache(mem_stats):
+    """Returns memory usage excluding reclaimable page cache, matching what
+    `docker stats` itself displays. The raw cgroup 'usage' figure counts page
+    cache for every file the container has written (e.g. log files growing
+    for the process lifetime), which makes long-running writers look like
+    they are leaking memory when they are not.
+    """
+    usage = mem_stats.get("usage", 0)
+    stats = mem_stats.get("stats", {})
+
+    # cgroup v2 reports "inactive_file"; cgroup v1 reports "total_inactive_file"
+    # (falling back to "cache" if the "total_*" aggregate isn't present).
+    if "inactive_file" in stats:
+        cache = stats["inactive_file"]
+    elif "total_inactive_file" in stats:
+        cache = stats["total_inactive_file"]
+    else:
+        cache = stats.get("cache", 0)
+
+    return max(usage - cache, 0)
+
 
 def calculate_cpu_percent(d):
     """Calculates CPU % exactly like 'docker stats'"""
@@ -85,7 +107,7 @@ with open(filename, 'w', newline='') as csvfile:
             
             # Check if 'usage' key exists, handle missing key gracefully
             if "usage" in mem_stats:
-                mem_current = mem_stats["usage"]
+                mem_current = calculate_mem_usage_no_cache(mem_stats)
                 mem_limit = mem_stats.get("limit", 1) # avoid divide by zero
             else:
                 # Fallback or zero if cgroups disabled
