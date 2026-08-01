@@ -1,0 +1,42 @@
+services:
+  python-baseline-conn:
+    build: .
+    container_name: python-baseline-conn
+    restart: unless-stopped
+
+    # devices:
+        # - "/dev/ttyUSB0:/dev/ttyUSB0" # Radio (only needed if MAVLINK_CONNECTION_STRING below is switched to a serial device instead of UDP)
+    user: root
+
+    environment:
+      # Input: MAVLink source. Defaults to listening for UDP on all interfaces,
+      # port 14550 - the sending device (companion computer / radio) must be
+      # configured to stream telemetry to this Pi's IP on that port.
+      - MAVLINK_CONNECTION_STRING=udp:0.0.0.0:14550
+      # Output: OPC UA server this gateway writes telemetry to. Point this at
+      # the other device's LAN/static IP - it must be reachable from the Pi.
+      - OPCUA_SERVER_ENDPOINT=opc.tcp://192.168.0.2:4841/
+      # Where the per-run metrics CSV is written inside the container - kept
+      # under /app/metrics so it lands in the bind mount below and survives
+      # container restarts/rebuilds.
+      - CSV_FILENAME=/app/metrics/naive_baseline_metrics.csv
+      # Optional, only for controlled benchmark replays (leave unset for a
+      # real/live drone on this Pi): path to the exact .tlog file being fed
+      # in via mavlink-replay's replay.py. Enables a real per-type delivery
+      # ratio (see python-baseline-conn/README.md) since the wire-level
+      # MAVLink sequence counter is not usable with that tooling today.
+      # - SOURCE_TLOG_PATH=/app/data/synth_50hz_15min.tlog
+
+    # Mount a local metrics directory so the CSV log persists on the host
+    # and can be pulled off the Pi after a benchmark run.
+    volumes:
+      - ./metrics:/app/metrics
+
+    # ports:
+      # # Input: MAVLink (only needed if network_mode isn't 'host')
+      # - "14550:14550/udp"
+
+    # 'host' network mode is faster for high-frequency UDP as it bypasses the
+    # Docker NAT, and lets the container reach the OPC UA server directly by
+    # LAN IP without any port mapping.
+    network_mode: host
