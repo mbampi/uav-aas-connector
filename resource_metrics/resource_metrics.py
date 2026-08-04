@@ -8,7 +8,6 @@ from datetime import datetime
 # --- Configuration ---
 # Container to monitor
 CONTAINER_NAME = os.getenv("TARGET_CONTAINER", "uav-aas-connector")
-DURATION_SEC = int(os.getenv("DURATION_SEC", 1020)) # 17 min = 1020 sec
 INTERVAL_SEC = float(os.getenv("INTERVAL_SEC", 0.5))
 
 # Output setup
@@ -18,7 +17,6 @@ if not os.path.exists(OUTPUT_DIR):
 
 print(f"--- Native Metrics Collector ---")
 print(f"Target: {CONTAINER_NAME}")
-print(f"Duration: {DURATION_SEC}s")
 print(f"Connecting to Docker Socket...")
 
 # Connect to Docker Socket (requires /var/run/docker.sock mounted)
@@ -89,52 +87,54 @@ with open(filename, 'w', newline='') as csvfile:
     writer = csv.writer(csvfile)
     writer.writerow(["Timestamp", "CPU_Percent", "Memory_Bytes", "Memory_Percent"])
     
-    start_time = time.time()
-    next_call = start_time
-    
-    print(f"Starting collection... Writing to {filename}")
-    
-    while (time.time() - start_time) < DURATION_SEC:
-        try:
-            # Fetch real-time stats
-            stats = container.stats(stream=False)
-            
-            # 1. CPU
-            cpu_pct = calculate_cpu_percent(stats)
-            
-            # 2. Memory
-            mem_stats = stats.get("memory_stats", {})
-            
-            # Check if 'usage' key exists, handle missing key gracefully
-            if "usage" in mem_stats:
-                mem_current = calculate_mem_usage_no_cache(mem_stats)
-                mem_limit = mem_stats.get("limit", 1) # avoid divide by zero
-            else:
-                # Fallback or zero if cgroups disabled
-                mem_current = 0
-                mem_limit = 1
-                
-            mem_pct = (mem_current / mem_limit) * 100.0
-            
-            # 3. Timestamp
-            now = time.time()
-            
-            writer.writerow([now, f"{cpu_pct:.2f}", mem_current, f"{mem_pct:.2f}"])
-            csvfile.flush()
-            
-            print(f"T: {datetime.fromtimestamp(now).strftime('%H:%M:%S')} | CPU: {cpu_pct:.5f}% | MEM: {mem_pct:.2f}%")
-            
-        except Exception as e:
-            print(f"Error collecting metrics: {e}")
-            try:
-                container.reload()
-                if container.status != 'running':
-                    print("Target container stopped. Exiting.")
-                    break
-            except:
-                break
+    next_call = time.time()
 
-        next_call = next_call + INTERVAL_SEC
-        time.sleep(max(0, next_call - time.time()))
+    print(f"Starting collection... Writing to {filename}")
+
+    try:
+        while True:
+            try:
+                # Fetch real-time stats
+                stats = container.stats(stream=False)
+
+                # 1. CPU
+                cpu_pct = calculate_cpu_percent(stats)
+
+                # 2. Memory
+                mem_stats = stats.get("memory_stats", {})
+
+                # Check if 'usage' key exists, handle missing key gracefully
+                if "usage" in mem_stats:
+                    mem_current = calculate_mem_usage_no_cache(mem_stats)
+                    mem_limit = mem_stats.get("limit", 1) # avoid divide by zero
+                else:
+                    # Fallback or zero if cgroups disabled
+                    mem_current = 0
+                    mem_limit = 1
+
+                mem_pct = (mem_current / mem_limit) * 100.0
+
+                # 3. Timestamp
+                now = time.time()
+
+                writer.writerow([now, f"{cpu_pct:.2f}", mem_current, f"{mem_pct:.2f}"])
+                csvfile.flush()
+
+                print(f"T: {datetime.fromtimestamp(now).strftime('%H:%M:%S')} | CPU: {cpu_pct:.5f}% | MEM: {mem_pct:.2f}%")
+
+            except Exception as e:
+                print(f"Error collecting metrics: {e}")
+                try:
+                    container.reload()
+                    if container.status != 'running':
+                        print("Target container stopped. Exiting.")
+                        break
+                except:
+                    break
+
+            next_call = next_call + INTERVAL_SEC
+            time.sleep(max(0, next_call - time.time()))
+    except KeyboardInterrupt:
+        print("Stopped by user.")
 
 print("Collection Complete.")
