@@ -65,6 +65,16 @@ For a standalone deployment - e.g. a Raspberry Pi 5 sitting between a flight con
 
 ---
 
+### Resource Monitoring (same method as the Go connector)
+
+`docker-compose.yml` also brings up a `metrics-collector` service - `resource_metrics/Dockerfile` and `resource_metrics/resource_metrics.py` here are byte-for-byte copies of `uav-aas-connector/resource_metrics`, not a reimplementation. It polls the Docker Engine stats API for the `python-baseline-conn` container specifically and computes CPU%/Memory with the exact same formulas `docker stats` itself uses (see the script's `calculate_cpu_percent`/`calculate_mem_usage_no_cache`), on the same ~2 s cadence, writing the same four-column schema (`Timestamp,CPU_Percent,Memory_Bytes,Memory_Percent`) to `./metrics/python-baseline-conn_<timestamp>.csv`.
+
+**This is the CSV to use for any CPU/memory comparison against the Go connector's own numbers.** `naive_baseline_metrics.csv`'s own `CPU_Percent`/`Memory_MB` columns (documented below) are a *different, in-process* measurement - `psutil` self-reporting from inside the Python process, sampled once per MAVLink message rather than on a fixed wall-clock interval - and are not on the same measurement basis as the connector's Docker-stats-based numbers. Keep them as a secondary, supplementary signal (they're still useful for correlating a CPU/memory spike with a specific message type or moment in the run), not as the headline metric in a cross-system comparison.
+
+`docker compose up -d --build` builds and starts both containers together; `docker compose down` stops both. Both CSVs land in `./metrics/` on the host and can be pulled off the Pi at any time, exactly as described in step 5 above.
+
+---
+
 ### Testing against `uav-aas-tools`
 
 This gateway's defaults (`MAVLINK_CONNECTION_STRING`, `OPCUA_SERVER_ENDPOINT`, and the four `get_node()` paths) are pre-configured to match `../../../uav-aas-tools/opcua_server` (`quad_op.nodeset.xml`) and `../../../uav-aas-tools/mavlink-replay`. Start the OPC UA server and this gateway first (order between the two doesn't matter), then start the replay last:
@@ -97,8 +107,10 @@ Upon execution, the script generates a real-time CSV file logging the performanc
   **Known unreliable with `mavlink-replay`/`synth.py` as of 2026-08:** both tools serialize messages with `msg.pack(mav)` but never call `mav.send(...)`, and pymavlink only advances its sequence counter inside `send()` — so every replayed/synthetic packet carries `seq = 0` on the wire, and this column reads a constant 255 on every row regardless of real network conditions. Don't use it (or the `total_dropped` console/exit stat, which is derived from it) as a loss metric until that's fixed upstream. Use the `SOURCE_TLOG_PATH`-based delivery ratio below instead.
 * **`Queue_Wait_ms`:** Time elapsed since the previous *tracked* message finished processing. Captures backlog/queueing delay caused by the single-threaded, blocking design — add this to `Processing_Latency_ms` to get the full end-to-end pipeline latency for a message.
 * **`Processing_Latency_ms`:** The time taken (in milliseconds) to perform the math and wait for the OPC UA server to acknowledge the write. 
-* **`CPU_Usage_%`:** The current CPU utilization of the Python process during the translation cycle.
-* **`Memory_RSS_MB`:** The Resident Set Size (RAM) consumed by the script in Megabytes.
+* **`CPU_Percent`:** The current CPU utilization of the Python process during the translation cycle, self-reported via `psutil.Process.cpu_percent()`.
+* **`Memory_MB`:** The Resident Set Size (RAM) consumed by the script in Megabytes, self-reported via `psutil.Process.memory_info().rss`.
+
+Both of these are sampled once per processed message, in-process - see [Resource Monitoring](#resource-monitoring-same-method-as-the-go-connector) above for the separate, externally-sampled CSV to use when comparing CPU/memory against the Go connector.
 
 ### Measuring Real Packet Loss (`SOURCE_TLOG_PATH`)
 

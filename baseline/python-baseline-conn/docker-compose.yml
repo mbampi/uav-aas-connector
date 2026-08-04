@@ -40,3 +40,22 @@ services:
     # Docker NAT, and lets the container reach the OPC UA server directly by
     # LAN IP without any port mapping.
     network_mode: host
+
+  # Same external, Docker-stats-based resource monitor used for the Go
+  # connector (uav-aas-connector/resource_metrics), copied here verbatim so
+  # CPU/Memory are sampled identically (same formulas, same ~2s cadence, same
+  # CSV schema) for both systems under comparison. This container's own
+  # process-level psutil CPU_Percent/Memory_MB columns in
+  # naive_baseline_metrics.csv are a secondary, in-process signal only - this
+  # sidecar's uav-aas-connector-style CSV in ./metrics is the one to use for
+  # any cross-system comparison against the Go connector's numbers.
+  metrics-collector:
+    build: ./resource_metrics
+    container_name: metrics-collector
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./metrics:/output
+    environment:
+      - TARGET_CONTAINER=python-baseline-conn
+      - INTERVAL_SEC=0.5
+    restart: "no"
