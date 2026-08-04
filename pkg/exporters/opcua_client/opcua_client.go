@@ -23,7 +23,25 @@ import (
 // requests safely (each gets its own request ID and response handler), so
 // this is purely a backpressure knob against the remote server, not a
 // correctness requirement.
-const defaultMaxConcurrentWrites = 4
+//
+// It does NOT provide real parallelism against a single OPC UA endpoint:
+// gopcua serializes every Write on the secure channel's instance lock
+// (encode+encrypt+socket-write happen under one mutex), and a typical OPC UA
+// server (e.g. python-asyncua) processes requests on a single event loop.
+// Raising this only lets more, smaller batches be dispatched concurrently -
+// see minBatchInterval, which is what actually controls batch size.
+const defaultMaxConcurrentWrites = 2
+
+// defaultMinBatchInterval floors how often networkWorker drains
+// pendingUpdates, independent of maxConcurrentWrites. Without this floor,
+// a large maxConcurrentWrites lets the drain loop fire on almost every
+// triggerChan wakeup - fragmenting updates into many tiny WriteRequests
+// instead of coalescing them. Since the remote endpoint is effectively
+// single-lane (see defaultMaxConcurrentWrites), more, smaller requests just
+// queue up behind each other, inflating write latency instead of reducing
+// it. This interval guarantees a minimum coalescing window regardless of
+// how many concurrent writers are configured.
+const defaultMinBatchInterval = 3 * time.Millisecond
 
 // Exporter implements an OPC UA output exporter for the UAV AAS Connector.
 type Exporter struct {
@@ -52,6 +70,12 @@ type Exporter struct {
 	// it; pipelining a few writes hides that tail instead of paying it once
 	// per batch.
 	maxConcurrentWrites int
+
+	// minBatchInterval floors how often networkWorker drains pendingUpdates
+	// (see defaultMinBatchInterval). This is what actually controls batch
+	// size; maxConcurrentWrites only controls how many of those batches can
+	// be in flight at once.
+	minBatchInterval time.Duration
 
 	// Decoupling components
 	pendingUpdates map[string]*core.AASUpdateEvent
@@ -100,6 +124,11 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 		maxConcurrentWrites = defaultMaxConcurrentWrites
 	}
 
+	minBatchInterval := defaultMinBatchInterval
+	if cfg.MinBatchIntervalMs > 0 {
+		minBatchInterval = time.Duration(cfg.MinBatchIntervalMs * float64(time.Millisecond))
+	}
+
 	return &Exporter{
 		client:              c,
 		core:                aasCore,
@@ -110,6 +139,7 @@ func NewExporter(cfg config.ExporterConfig, aasCore *core.AASCore) (*Exporter, e
 		enableDedup:         cfg.EnableDeduplication,
 		maxAge:              maxAge,
 		maxConcurrentWrites: maxConcurrentWrites,
+		minBatchInterval:    minBatchInterval,
 		pendingUpdates:      make(map[string]*core.AASUpdateEvent),
 		triggerChan:         make(chan struct{}, 1), // Buffer of 1 ensures non-blocking triggers
 		drops:               instrumentation.DropCounter("exporter.opcua_client"),
@@ -178,11 +208,27 @@ func (e *Exporter) networkWorker(ctx context.Context) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
+	var lastFlush time.Time
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-e.triggerChan: // Wakes up instantly when new data arrives
+		case <-e.triggerChan: // Wakes up when new data arrives
+			// Enforce the minimum coalescing window (see minBatchInterval)
+			// regardless of how fast triggerChan fires or how free the
+			// semaphore is: without this, a large maxConcurrentWrites lets
+			// this loop drain on almost every wakeup, fragmenting updates
+			// into many tiny WriteRequests instead of batching them.
+			if wait := e.minBatchInterval - time.Since(lastFlush); wait > 0 {
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+					return
+				}
+			}
+			lastFlush = time.Now()
+
 			// 1. Extract and clear the pending state as fast as possible
 			e.pendingMu.Lock()
 
