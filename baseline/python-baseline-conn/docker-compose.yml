@@ -41,6 +41,39 @@ services:
     # LAN IP without any port mapping.
     network_mode: host
 
+  # MQTT counterpart of python-baseline-conn above: same image, same naive
+  # single-threaded/blocking architecture and MAVLink message set, just
+  # publishing to an MQTT broker (main_mqtt.py) instead of writing to an OPC
+  # UA server (main.py). Deliberately given the SAME container_name as the
+  # OPC UA service - the two are never meant to run at the same time (both
+  # bind MAVLink UDP :14550 in host network mode, so starting both together
+  # would conflict anyway), and reusing the name lets metrics-collector's
+  # fixed TARGET_CONTAINER below work unmodified for whichever one is
+  # actually running. Bring this one up instead of python-baseline-conn with:
+  #   docker compose up -d --build python-baseline-conn-mqtt metrics-collector
+  python-baseline-conn-mqtt:
+    build: .
+    container_name: python-baseline-conn
+    entrypoint: ["python", "main_mqtt.py"]
+    restart: unless-stopped
+    user: root
+
+    environment:
+      - MAVLINK_CONNECTION_STRING=udp:0.0.0.0:14550
+      # Output: MQTT broker this gateway publishes telemetry to. Point this
+      # at the other device's LAN/static IP - it must be reachable from the
+      # Pi. Same topic prefix as the Go connector's config.yaml on purpose -
+      # see main_mqtt.py's MQTT_TOPIC_PREFIX comment.
+      - MQTT_BROKER_URL=tcp://192.168.0.2:1883
+      - MQTT_TOPIC_PREFIX=aas/uav-1
+      - CSV_FILENAME=/app/metrics/naive_baseline_mqtt_metrics.csv
+      # - SOURCE_TLOG_PATH=/app/data/synth_50hz_15min.tlog
+
+    volumes:
+      - ./metrics:/app/metrics
+
+    network_mode: host
+
   # Same external, Docker-stats-based resource monitor used for the Go
   # connector (uav-aas-connector/resource_metrics), copied here verbatim so
   # CPU/Memory are sampled identically (same formulas, same ~2s cadence, same

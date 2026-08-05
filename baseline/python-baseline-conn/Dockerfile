@@ -12,10 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application source
-COPY main.py ./
+# Copy the application source - both the OPC UA (main.py) and MQTT
+# (main_mqtt.py) naive gateways live in the same image; which one runs is
+# selected by ENTRYPOINT/the compose service's `entrypoint:` override below,
+# not by a separate image per protocol.
+COPY main.py main_mqtt.py ./
 
 # 14550/udp: MAVLink Input
 EXPOSE 14550/udp
 
+# Default entrypoint runs the OPC UA variant; docker-compose.yml overrides
+# this to ["python", "main_mqtt.py"] for the MQTT service.
 ENTRYPOINT ["python", "main.py"]
