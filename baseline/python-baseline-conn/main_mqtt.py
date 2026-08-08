@@ -129,6 +129,8 @@ def build_payload(value, timestamp):
 
 def main():
     total_messages_processed = 0
+    total_write_success = 0
+    total_write_failures = 0
     total_dropped = 0
     arrived_counts = {t: 0 for t in TRACKED_MESSAGE_TYPES}
     expected_counts = {}
@@ -206,7 +208,7 @@ def main():
         with open(CSV_FILENAME, mode='w', newline='', buffering=1) as file:
             writer = csv.writer(file)
 
-            writer.writerow(["System_Time", "Message_Type", "MAVLink_Seq", "Dropped_Since_Last", "Queue_Wait_ms", "Processing_Latency_ms", "CPU_Percent", "Memory_MB"])
+            writer.writerow(["System_Time", "Message_Type", "MAVLink_Seq", "Dropped_Since_Last", "Queue_Wait_ms", "Processing_Latency_ms", "CPU_Percent", "Memory_MB", "Write_Success", "Error"])
 
             print("Starting instrumented read-publish loop... (Press Ctrl+C to stop)")
 
@@ -259,80 +261,112 @@ def main():
                     ts = datetime.fromtimestamp(now, tz=timezone.utc)
                     info = client.publish(topic_for(submodel, path), build_payload(value, ts), qos=0)
                     info.wait_for_publish(timeout=MQTT_PUBLISH_WAIT_S)
+                    if not info.is_published():
+                        # QoS 0 has no broker acknowledgment, so wait_for_publish()
+                        # times out silently rather than raising - without this
+                        # check, a stalled publish would be logged as an ordinary,
+                        # if slow, success. Raising here instead routes it through
+                        # the same per-message failure handling as an outright
+                        # paho exception (queue full, send error, etc.) below.
+                        raise RuntimeError(f"publish not confirmed within {MQTT_PUBLISH_WAIT_S}s (mid={info.mid})")
 
-                if msg_type == 'HEARTBEAT':
-                    pub('Status', 'VehicleType', int(msg.type))
-                    pub('Status', 'AutopilotType', int(msg.autopilot))
-                    pub('Status', 'SystemStatus', int(msg.system_status))
+                # Wrapped per message, not per run: without this, a single
+                # publish failure - a stalled/unconfirmed QoS 0 send (see pub()
+                # above), a queue-full error, or anything else paho raises -
+                # would propagate out of the whole loop and end a 15-minute
+                # benchmark on one bad publish. This does not make the gateway
+                # any less naive: publishes remain sequential, blocking, and
+                # unbatched (no coalescing, no worker pool); a mid-message
+                # failure still abandons whatever fields of that message were
+                # not yet published (no per-field recovery); and there is still
+                # no application-level reconnection logic beyond paho's own
+                # automatic TCP reconnect, so a broker outage still shows up
+                # honestly as a run of consecutive failures. It only stops one
+                # bad publish from discarding an otherwise-good run, and gives
+                # Write_Success below a real per-message signal instead of
+                # every logged row being unconditionally "successful" by
+                # construction - see main.py's identical comment for the OPC
+                # UA side of the same fix.
+                write_success = True
+                write_error = ""
+                try:
+                    if msg_type == 'HEARTBEAT':
+                        pub('Status', 'VehicleType', int(msg.type))
+                        pub('Status', 'AutopilotType', int(msg.autopilot))
+                        pub('Status', 'SystemStatus', int(msg.system_status))
 
-                elif msg_type == 'SYS_STATUS':
-                    if msg.voltage_battery != BATTERY_VOLTAGE_UNKNOWN:
-                        pub('Power', 'Voltage', msg.voltage_battery / 1000.0)
-                    pub('Power', 'Current', msg.current_battery * 0.01)  # cA -> A
-                    pub('Power', 'Remaining', int(msg.battery_remaining))
-                    pub('Power', 'CPULoad', int(msg.load * 0.1))  # d% -> %, truncated
-                    pub('Power', 'DropRateComm', int(msg.drop_rate_comm * 0.01))  # c% -> %, truncated
+                    elif msg_type == 'SYS_STATUS':
+                        if msg.voltage_battery != BATTERY_VOLTAGE_UNKNOWN:
+                            pub('Power', 'Voltage', msg.voltage_battery / 1000.0)
+                        pub('Power', 'Current', msg.current_battery * 0.01)  # cA -> A
+                        pub('Power', 'Remaining', int(msg.battery_remaining))
+                        pub('Power', 'CPULoad', int(msg.load * 0.1))  # d% -> %, truncated
+                        pub('Power', 'DropRateComm', int(msg.drop_rate_comm * 0.01))  # c% -> %, truncated
 
-                elif msg_type == 'GLOBAL_POSITION_INT':
-                    pub('Navigation', 'GlobalPosition/Latitude', msg.lat / 1e7)
-                    pub('Navigation', 'GlobalPosition/Longitude', msg.lon / 1e7)
-                    pub('Navigation', 'GlobalPosition/AltitudeMSL', msg.alt / 1000.0)
-                    pub('Navigation', 'GlobalPosition/Heading', msg.hdg * 0.01)  # cdeg -> deg
+                    elif msg_type == 'GLOBAL_POSITION_INT':
+                        pub('Navigation', 'GlobalPosition/Latitude', msg.lat / 1e7)
+                        pub('Navigation', 'GlobalPosition/Longitude', msg.lon / 1e7)
+                        pub('Navigation', 'GlobalPosition/AltitudeMSL', msg.alt / 1000.0)
+                        pub('Navigation', 'GlobalPosition/Heading', msg.hdg * 0.01)  # cdeg -> deg
 
-                elif msg_type == 'LOCAL_POSITION_NED':
-                    pub('Navigation', 'LocalPositionNED/X', msg.x)
-                    pub('Navigation', 'LocalPositionNED/Y', msg.y)
-                    pub('Navigation', 'LocalPositionNED/Z', msg.z)
-                    pub('Navigation', 'LocalPositionNED/VX', msg.vx)
-                    pub('Navigation', 'LocalPositionNED/VY', msg.vy)
-                    pub('Navigation', 'LocalPositionNED/VZ', msg.vz)
+                    elif msg_type == 'LOCAL_POSITION_NED':
+                        pub('Navigation', 'LocalPositionNED/X', msg.x)
+                        pub('Navigation', 'LocalPositionNED/Y', msg.y)
+                        pub('Navigation', 'LocalPositionNED/Z', msg.z)
+                        pub('Navigation', 'LocalPositionNED/VX', msg.vx)
+                        pub('Navigation', 'LocalPositionNED/VY', msg.vy)
+                        pub('Navigation', 'LocalPositionNED/VZ', msg.vz)
 
-                elif msg_type == 'GPS_RAW_INT':
-                    pub('Navigation', 'GPS_Raw/FixType', int(msg.fix_type))
-                    pub('Navigation', 'GPS_Raw/SatellitesVisible', int(msg.satellites_visible))
-                    pub('Navigation', 'GPS_Raw/HDOP', msg.eph * 0.01)  # cm -> m
+                    elif msg_type == 'GPS_RAW_INT':
+                        pub('Navigation', 'GPS_Raw/FixType', int(msg.fix_type))
+                        pub('Navigation', 'GPS_Raw/SatellitesVisible', int(msg.satellites_visible))
+                        pub('Navigation', 'GPS_Raw/HDOP', msg.eph * 0.01)  # cm -> m
 
-                elif msg_type == 'ALTITUDE':
-                    pub('Navigation', 'TerrainData/TerrainAltitude', msg.altitude_terrain)
-                    pub('Navigation', 'TerrainData/BottomClearance', msg.bottom_clearance)
+                    elif msg_type == 'ALTITUDE':
+                        pub('Navigation', 'TerrainData/TerrainAltitude', msg.altitude_terrain)
+                        pub('Navigation', 'TerrainData/BottomClearance', msg.bottom_clearance)
 
-                elif msg_type == 'ATTITUDE':
-                    pub('Attitude', 'EulerAngles/Roll', msg.roll)
-                    pub('Attitude', 'EulerAngles/Pitch', msg.pitch)
-                    pub('Attitude', 'EulerAngles/Yaw', msg.yaw)
-                    pub('Attitude', 'EulerAngles/RollSpeed', msg.rollspeed)
-                    pub('Attitude', 'EulerAngles/PitchSpeed', msg.pitchspeed)
-                    pub('Attitude', 'EulerAngles/YawSpeed', msg.yawspeed)
+                    elif msg_type == 'ATTITUDE':
+                        pub('Attitude', 'EulerAngles/Roll', msg.roll)
+                        pub('Attitude', 'EulerAngles/Pitch', msg.pitch)
+                        pub('Attitude', 'EulerAngles/Yaw', msg.yaw)
+                        pub('Attitude', 'EulerAngles/RollSpeed', msg.rollspeed)
+                        pub('Attitude', 'EulerAngles/PitchSpeed', msg.pitchspeed)
+                        pub('Attitude', 'EulerAngles/YawSpeed', msg.yawspeed)
 
-                elif msg_type == 'ATTITUDE_QUATERNION':
-                    pub('Attitude', 'Quaternion/Q1', msg.q1)
-                    pub('Attitude', 'Quaternion/Q2', msg.q2)
-                    pub('Attitude', 'Quaternion/Q3', msg.q3)
-                    pub('Attitude', 'Quaternion/Q4', msg.q4)
+                    elif msg_type == 'ATTITUDE_QUATERNION':
+                        pub('Attitude', 'Quaternion/Q1', msg.q1)
+                        pub('Attitude', 'Quaternion/Q2', msg.q2)
+                        pub('Attitude', 'Quaternion/Q3', msg.q3)
+                        pub('Attitude', 'Quaternion/Q4', msg.q4)
 
-                elif msg_type == 'ATTITUDE_TARGET':
-                    pub('Attitude', 'AttitudeTarget/BodyRollRate', msg.body_roll_rate)
-                    pub('Attitude', 'AttitudeTarget/BodyPitchRate', msg.body_pitch_rate)
-                    pub('Attitude', 'AttitudeTarget/BodyYawRate', msg.body_yaw_rate)
-                    pub('Attitude', 'AttitudeTarget/Thrust', msg.thrust)
+                    elif msg_type == 'ATTITUDE_TARGET':
+                        pub('Attitude', 'AttitudeTarget/BodyRollRate', msg.body_roll_rate)
+                        pub('Attitude', 'AttitudeTarget/BodyPitchRate', msg.body_pitch_rate)
+                        pub('Attitude', 'AttitudeTarget/BodyYawRate', msg.body_yaw_rate)
+                        pub('Attitude', 'AttitudeTarget/Thrust', msg.thrust)
 
-                elif msg_type == 'SERVO_OUTPUT_RAW':
-                    pub('Actuation', 'ServoOutput/Servo1', int(msg.servo1_raw))
-                    pub('Actuation', 'ServoOutput/Servo2', int(msg.servo2_raw))
-                    pub('Actuation', 'ServoOutput/Servo3', int(msg.servo3_raw))
-                    pub('Actuation', 'ServoOutput/Servo4', int(msg.servo4_raw))
+                    elif msg_type == 'SERVO_OUTPUT_RAW':
+                        pub('Actuation', 'ServoOutput/Servo1', int(msg.servo1_raw))
+                        pub('Actuation', 'ServoOutput/Servo2', int(msg.servo2_raw))
+                        pub('Actuation', 'ServoOutput/Servo3', int(msg.servo3_raw))
+                        pub('Actuation', 'ServoOutput/Servo4', int(msg.servo4_raw))
 
-                elif msg_type == 'VFR_HUD':
-                    pub('HUD', 'Airspeed', msg.airspeed)
-                    pub('HUD', 'Groundspeed', msg.groundspeed)
-                    pub('HUD', 'Heading', int(msg.heading))
-                    pub('HUD', 'Throttle', int(msg.throttle))
-                    pub('HUD', 'Altitude', msg.alt)
-                    pub('HUD', 'ClimbRate', msg.climb)
+                    elif msg_type == 'VFR_HUD':
+                        pub('HUD', 'Airspeed', msg.airspeed)
+                        pub('HUD', 'Groundspeed', msg.groundspeed)
+                        pub('HUD', 'Heading', int(msg.heading))
+                        pub('HUD', 'Throttle', int(msg.throttle))
+                        pub('HUD', 'Altitude', msg.alt)
+                        pub('HUD', 'ClimbRate', msg.climb)
 
-                elif msg_type == 'OPEN_DRONE_ID_SYSTEM':
-                    pub('Identification', 'RemoteID_System/OperatorLocationType', int(msg.operator_location_type))
-                    pub('Identification', 'RemoteID_System/ClassificationType', int(msg.classification_type))
+                    elif msg_type == 'OPEN_DRONE_ID_SYSTEM':
+                        pub('Identification', 'RemoteID_System/OperatorLocationType', int(msg.operator_location_type))
+                        pub('Identification', 'RemoteID_System/ClassificationType', int(msg.classification_type))
+                except Exception as e:
+                    write_success = False
+                    write_error = str(e)[:200]
+                    print(f"Publish failed for {msg_type} (seq={current_seq}): {write_error}")
 
                 # End latency timer
                 t_end = time.perf_counter()
@@ -343,7 +377,11 @@ def main():
                 mem_info = process.memory_info().rss / (1024 * 1024)
 
                 total_messages_processed += 1
-                arrived_counts[msg_type] += 1
+                if write_success:
+                    total_write_success += 1
+                    arrived_counts[msg_type] += 1
+                else:
+                    total_write_failures += 1
 
                 writer.writerow([
                     time.time(),
@@ -353,23 +391,29 @@ def main():
                     round(queue_wait_ms, 3),
                     round(latency_ms, 3),
                     round(cpu_percent, 2),
-                    round(mem_info, 2)
+                    round(mem_info, 2),
+                    write_success,
+                    write_error,
                 ])
                 if total_messages_processed % 50 == 0:
                     if expected_counts:
                         expected_total = sum(expected_counts.values())
-                        delivery_pct = (total_messages_processed / expected_total * 100) if expected_total else 0.0
-                        print(f"Processed: {total_messages_processed} | Delivery: {total_messages_processed}/{expected_total} ({delivery_pct:.1f}%) | Last Latency: {latency_ms:.1f}ms")
+                        delivery_pct = (total_write_success / expected_total * 100) if expected_total else 0.0
+                        print(f"Processed: {total_messages_processed} (success: {total_write_success}, publish failures: {total_write_failures}) | "
+                              f"Delivery: {total_write_success}/{expected_total} ({delivery_pct:.1f}%) | Last Latency: {latency_ms:.1f}ms")
                     else:
-                        print(f"Processed: {total_messages_processed} | Total Dropped (raw wire-seq, unreliable - see README): {total_dropped} | Last Latency: {latency_ms:.1f}ms")
+                        print(f"Processed: {total_messages_processed} (success: {total_write_success}, publish failures: {total_write_failures}) | "
+                              f"Total Dropped (raw wire-seq, unreliable - see README): {total_dropped} | Last Latency: {latency_ms:.1f}ms")
 
     except KeyboardInterrupt:
         print("\nBenchmark stopped by user.")
     except Exception as e:
         print(f"\nGateway crashed: {e}")
     finally:
-        print(f"Final Stats: {total_messages_processed} processed, {total_dropped} dropped "
-              f"(raw wire-seq count - unreliable with the current replay/synth tooling, see README).")
+        write_success_pct = (total_write_success / total_messages_processed * 100) if total_messages_processed else 0.0
+        print(f"Final Stats: {total_messages_processed} processed "
+              f"({total_write_success} publish-confirmed [{write_success_pct:.2f}%], {total_write_failures} publish failures), "
+              f"{total_dropped} dropped (raw wire-seq count - unreliable with the current replay/synth tooling, see README).")
 
         if expected_counts:
             print("Per-type delivery ratio (arrived / expected from source .tlog, tracked types only):")

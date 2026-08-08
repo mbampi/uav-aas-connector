@@ -75,6 +75,8 @@ async def main():
     # only assigned deep inside the try block, so a failure during connect()
     # raised an UnboundLocalError from `finally` that masked the real error.
     total_messages_processed = 0
+    total_write_success = 0
+    total_write_failures = 0
     total_dropped = 0
     opcua_connected = False
     arrived_counts = {t: 0 for t in TRACKED_MESSAGE_TYPES}
@@ -204,7 +206,7 @@ async def main():
             writer = csv.writer(file)
 
             # Write CSV Header
-            writer.writerow(["System_Time", "Message_Type", "MAVLink_Seq", "Dropped_Since_Last", "Queue_Wait_ms", "Processing_Latency_ms", "CPU_Percent", "Memory_MB"])
+            writer.writerow(["System_Time", "Message_Type", "MAVLink_Seq", "Dropped_Since_Last", "Queue_Wait_ms", "Processing_Latency_ms", "CPU_Percent", "Memory_MB", "Write_Success", "Error"])
 
             print("Starting instrumented read-write loop... (Press Ctrl+C to stop)")
 
@@ -249,97 +251,122 @@ async def main():
                 # filtered out here - they're scaled and written through as-is,
                 # except voltage_battery below, which was already special-cased
                 # before this change and is left as-is.
-                if msg_type == 'HEARTBEAT':
-                    await vehicle_type_node.set_value(ua.DataValue(ua.Variant(int(msg.type), ua.VariantType.Int32)))
-                    await autopilot_type_node.set_value(ua.DataValue(ua.Variant(int(msg.autopilot), ua.VariantType.Int32)))
-                    await system_status_node.set_value(ua.DataValue(ua.Variant(int(msg.system_status), ua.VariantType.Int32)))
+                #
+                # Wrapped per message, not per run: asyncua raises on a failed
+                # write (Node.write_attribute() calls result[0].check(), which
+                # raises ua.UaStatusCodeError on a bad status code), so without
+                # this a single transient write error - plausible over a real,
+                # non-loopback LAN hop to the OPC UA server across a 15-minute
+                # run - would otherwise propagate out of the whole loop and end
+                # the benchmark, discarding all data collected up to that point.
+                # This does not make the gateway any less naive: writes are
+                # still sequential, blocking, and unbatched; a mid-message
+                # failure still abandons whatever fields of that message were
+                # not yet written (no per-field recovery), and there is still
+                # no reconnection logic, so a truly dead connection shows up
+                # honestly as a run of consecutive failures rather than being
+                # silently recovered from. It only stops one bad write from
+                # discarding an otherwise-good run, and gives Write_Success
+                # below a real per-message signal instead of every logged row
+                # being unconditionally "successful" by construction.
+                write_success = True
+                write_error = ""
+                try:
+                    if msg_type == 'HEARTBEAT':
+                        await vehicle_type_node.set_value(ua.DataValue(ua.Variant(int(msg.type), ua.VariantType.Int32)))
+                        await autopilot_type_node.set_value(ua.DataValue(ua.Variant(int(msg.autopilot), ua.VariantType.Int32)))
+                        await system_status_node.set_value(ua.DataValue(ua.Variant(int(msg.system_status), ua.VariantType.Int32)))
 
-                elif msg_type == 'SYS_STATUS':
-                    if msg.voltage_battery != BATTERY_VOLTAGE_UNKNOWN:
-                        # MAVLink sentinel for "not reported" - skip rather than
-                        # writing a bogus 65.535V into the digital twin.
-                        voltage = msg.voltage_battery / 1000.0
-                        await bat_node.set_value(ua.DataValue(ua.Variant(voltage, ua.VariantType.Double)))
+                    elif msg_type == 'SYS_STATUS':
+                        if msg.voltage_battery != BATTERY_VOLTAGE_UNKNOWN:
+                            # MAVLink sentinel for "not reported" - skip rather than
+                            # writing a bogus 65.535V into the digital twin.
+                            voltage = msg.voltage_battery / 1000.0
+                            await bat_node.set_value(ua.DataValue(ua.Variant(voltage, ua.VariantType.Double)))
 
-                    current = msg.current_battery * 0.01  # cA -> A
-                    await current_node.set_value(ua.DataValue(ua.Variant(current, ua.VariantType.Double)))
+                        current = msg.current_battery * 0.01  # cA -> A
+                        await current_node.set_value(ua.DataValue(ua.Variant(current, ua.VariantType.Double)))
 
-                    await remaining_node.set_value(ua.DataValue(ua.Variant(int(msg.battery_remaining), ua.VariantType.Int32)))
+                        await remaining_node.set_value(ua.DataValue(ua.Variant(int(msg.battery_remaining), ua.VariantType.Int32)))
 
-                    cpu_load = int(msg.load * 0.1)  # d% -> %, truncated (Power/CPULoad is Int32)
-                    await cpu_load_node.set_value(ua.DataValue(ua.Variant(cpu_load, ua.VariantType.Int32)))
+                        cpu_load = int(msg.load * 0.1)  # d% -> %, truncated (Power/CPULoad is Int32)
+                        await cpu_load_node.set_value(ua.DataValue(ua.Variant(cpu_load, ua.VariantType.Int32)))
 
-                    drop_rate = int(msg.drop_rate_comm * 0.01)  # c% -> %, truncated (Power/DropRateComm is Int32)
-                    await drop_rate_comm_node.set_value(ua.DataValue(ua.Variant(drop_rate, ua.VariantType.Int32)))
+                        drop_rate = int(msg.drop_rate_comm * 0.01)  # c% -> %, truncated (Power/DropRateComm is Int32)
+                        await drop_rate_comm_node.set_value(ua.DataValue(ua.Variant(drop_rate, ua.VariantType.Int32)))
 
-                elif msg_type == 'GLOBAL_POSITION_INT':
-                    lat = msg.lat / 1e7
-                    lon = msg.lon / 1e7
-                    alt = msg.alt / 1000.0
-                    hdg = msg.hdg * 0.01  # cdeg -> deg
+                    elif msg_type == 'GLOBAL_POSITION_INT':
+                        lat = msg.lat / 1e7
+                        lon = msg.lon / 1e7
+                        alt = msg.alt / 1000.0
+                        hdg = msg.hdg * 0.01  # cdeg -> deg
 
-                    await lat_node.set_value(ua.DataValue(ua.Variant(lat, ua.VariantType.Double)))
-                    await lon_node.set_value(ua.DataValue(ua.Variant(lon, ua.VariantType.Double)))
-                    await alt_node.set_value(ua.DataValue(ua.Variant(alt, ua.VariantType.Double)))
-                    await hdg_node.set_value(ua.DataValue(ua.Variant(hdg, ua.VariantType.Double)))
+                        await lat_node.set_value(ua.DataValue(ua.Variant(lat, ua.VariantType.Double)))
+                        await lon_node.set_value(ua.DataValue(ua.Variant(lon, ua.VariantType.Double)))
+                        await alt_node.set_value(ua.DataValue(ua.Variant(alt, ua.VariantType.Double)))
+                        await hdg_node.set_value(ua.DataValue(ua.Variant(hdg, ua.VariantType.Double)))
 
-                elif msg_type == 'LOCAL_POSITION_NED':
-                    await local_x_node.set_value(ua.DataValue(ua.Variant(msg.x, ua.VariantType.Double)))
-                    await local_y_node.set_value(ua.DataValue(ua.Variant(msg.y, ua.VariantType.Double)))
-                    await local_z_node.set_value(ua.DataValue(ua.Variant(msg.z, ua.VariantType.Double)))
-                    await local_vx_node.set_value(ua.DataValue(ua.Variant(msg.vx, ua.VariantType.Double)))
-                    await local_vy_node.set_value(ua.DataValue(ua.Variant(msg.vy, ua.VariantType.Double)))
-                    await local_vz_node.set_value(ua.DataValue(ua.Variant(msg.vz, ua.VariantType.Double)))
+                    elif msg_type == 'LOCAL_POSITION_NED':
+                        await local_x_node.set_value(ua.DataValue(ua.Variant(msg.x, ua.VariantType.Double)))
+                        await local_y_node.set_value(ua.DataValue(ua.Variant(msg.y, ua.VariantType.Double)))
+                        await local_z_node.set_value(ua.DataValue(ua.Variant(msg.z, ua.VariantType.Double)))
+                        await local_vx_node.set_value(ua.DataValue(ua.Variant(msg.vx, ua.VariantType.Double)))
+                        await local_vy_node.set_value(ua.DataValue(ua.Variant(msg.vy, ua.VariantType.Double)))
+                        await local_vz_node.set_value(ua.DataValue(ua.Variant(msg.vz, ua.VariantType.Double)))
 
-                elif msg_type == 'GPS_RAW_INT':
-                    await gps_fix_type_node.set_value(ua.DataValue(ua.Variant(int(msg.fix_type), ua.VariantType.Int32)))
-                    await gps_sats_node.set_value(ua.DataValue(ua.Variant(int(msg.satellites_visible), ua.VariantType.Int32)))
+                    elif msg_type == 'GPS_RAW_INT':
+                        await gps_fix_type_node.set_value(ua.DataValue(ua.Variant(int(msg.fix_type), ua.VariantType.Int32)))
+                        await gps_sats_node.set_value(ua.DataValue(ua.Variant(int(msg.satellites_visible), ua.VariantType.Int32)))
 
-                    hdop = msg.eph * 0.01  # cm -> m
-                    await gps_hdop_node.set_value(ua.DataValue(ua.Variant(hdop, ua.VariantType.Double)))
+                        hdop = msg.eph * 0.01  # cm -> m
+                        await gps_hdop_node.set_value(ua.DataValue(ua.Variant(hdop, ua.VariantType.Double)))
 
-                elif msg_type == 'ALTITUDE':
-                    # Navigation/TerrainData/* nodes are 32-bit Float, not Double.
-                    await terrain_alt_node.set_value(ua.DataValue(ua.Variant(msg.altitude_terrain, ua.VariantType.Float)))
-                    await bottom_clearance_node.set_value(ua.DataValue(ua.Variant(msg.bottom_clearance, ua.VariantType.Float)))
+                    elif msg_type == 'ALTITUDE':
+                        # Navigation/TerrainData/* nodes are 32-bit Float, not Double.
+                        await terrain_alt_node.set_value(ua.DataValue(ua.Variant(msg.altitude_terrain, ua.VariantType.Float)))
+                        await bottom_clearance_node.set_value(ua.DataValue(ua.Variant(msg.bottom_clearance, ua.VariantType.Float)))
 
-                elif msg_type == 'ATTITUDE':
-                    await roll_node.set_value(ua.DataValue(ua.Variant(msg.roll, ua.VariantType.Double)))
-                    await pitch_node.set_value(ua.DataValue(ua.Variant(msg.pitch, ua.VariantType.Double)))
-                    await yaw_node.set_value(ua.DataValue(ua.Variant(msg.yaw, ua.VariantType.Double)))
-                    await rollspeed_node.set_value(ua.DataValue(ua.Variant(msg.rollspeed, ua.VariantType.Double)))
-                    await pitchspeed_node.set_value(ua.DataValue(ua.Variant(msg.pitchspeed, ua.VariantType.Double)))
-                    await yawspeed_node.set_value(ua.DataValue(ua.Variant(msg.yawspeed, ua.VariantType.Double)))
+                    elif msg_type == 'ATTITUDE':
+                        await roll_node.set_value(ua.DataValue(ua.Variant(msg.roll, ua.VariantType.Double)))
+                        await pitch_node.set_value(ua.DataValue(ua.Variant(msg.pitch, ua.VariantType.Double)))
+                        await yaw_node.set_value(ua.DataValue(ua.Variant(msg.yaw, ua.VariantType.Double)))
+                        await rollspeed_node.set_value(ua.DataValue(ua.Variant(msg.rollspeed, ua.VariantType.Double)))
+                        await pitchspeed_node.set_value(ua.DataValue(ua.Variant(msg.pitchspeed, ua.VariantType.Double)))
+                        await yawspeed_node.set_value(ua.DataValue(ua.Variant(msg.yawspeed, ua.VariantType.Double)))
 
-                elif msg_type == 'ATTITUDE_QUATERNION':
-                    await q1_node.set_value(ua.DataValue(ua.Variant(msg.q1, ua.VariantType.Double)))
-                    await q2_node.set_value(ua.DataValue(ua.Variant(msg.q2, ua.VariantType.Double)))
-                    await q3_node.set_value(ua.DataValue(ua.Variant(msg.q3, ua.VariantType.Double)))
-                    await q4_node.set_value(ua.DataValue(ua.Variant(msg.q4, ua.VariantType.Double)))
+                    elif msg_type == 'ATTITUDE_QUATERNION':
+                        await q1_node.set_value(ua.DataValue(ua.Variant(msg.q1, ua.VariantType.Double)))
+                        await q2_node.set_value(ua.DataValue(ua.Variant(msg.q2, ua.VariantType.Double)))
+                        await q3_node.set_value(ua.DataValue(ua.Variant(msg.q3, ua.VariantType.Double)))
+                        await q4_node.set_value(ua.DataValue(ua.Variant(msg.q4, ua.VariantType.Double)))
 
-                elif msg_type == 'ATTITUDE_TARGET':
-                    await body_roll_rate_node.set_value(ua.DataValue(ua.Variant(msg.body_roll_rate, ua.VariantType.Double)))
-                    await body_pitch_rate_node.set_value(ua.DataValue(ua.Variant(msg.body_pitch_rate, ua.VariantType.Double)))
-                    await body_yaw_rate_node.set_value(ua.DataValue(ua.Variant(msg.body_yaw_rate, ua.VariantType.Double)))
-                    await thrust_node.set_value(ua.DataValue(ua.Variant(msg.thrust, ua.VariantType.Double)))
+                    elif msg_type == 'ATTITUDE_TARGET':
+                        await body_roll_rate_node.set_value(ua.DataValue(ua.Variant(msg.body_roll_rate, ua.VariantType.Double)))
+                        await body_pitch_rate_node.set_value(ua.DataValue(ua.Variant(msg.body_pitch_rate, ua.VariantType.Double)))
+                        await body_yaw_rate_node.set_value(ua.DataValue(ua.Variant(msg.body_yaw_rate, ua.VariantType.Double)))
+                        await thrust_node.set_value(ua.DataValue(ua.Variant(msg.thrust, ua.VariantType.Double)))
 
-                elif msg_type == 'SERVO_OUTPUT_RAW':
-                    await servo1_node.set_value(ua.DataValue(ua.Variant(int(msg.servo1_raw), ua.VariantType.Int32)))
-                    await servo2_node.set_value(ua.DataValue(ua.Variant(int(msg.servo2_raw), ua.VariantType.Int32)))
-                    await servo3_node.set_value(ua.DataValue(ua.Variant(int(msg.servo3_raw), ua.VariantType.Int32)))
-                    await servo4_node.set_value(ua.DataValue(ua.Variant(int(msg.servo4_raw), ua.VariantType.Int32)))
+                    elif msg_type == 'SERVO_OUTPUT_RAW':
+                        await servo1_node.set_value(ua.DataValue(ua.Variant(int(msg.servo1_raw), ua.VariantType.Int32)))
+                        await servo2_node.set_value(ua.DataValue(ua.Variant(int(msg.servo2_raw), ua.VariantType.Int32)))
+                        await servo3_node.set_value(ua.DataValue(ua.Variant(int(msg.servo3_raw), ua.VariantType.Int32)))
+                        await servo4_node.set_value(ua.DataValue(ua.Variant(int(msg.servo4_raw), ua.VariantType.Int32)))
 
-                elif msg_type == 'VFR_HUD':
-                    await airspeed_node.set_value(ua.DataValue(ua.Variant(msg.airspeed, ua.VariantType.Double)))
-                    await groundspeed_node.set_value(ua.DataValue(ua.Variant(msg.groundspeed, ua.VariantType.Double)))
-                    await hud_heading_node.set_value(ua.DataValue(ua.Variant(int(msg.heading), ua.VariantType.Int32)))
-                    await throttle_node.set_value(ua.DataValue(ua.Variant(int(msg.throttle), ua.VariantType.Int32)))
-                    await hud_altitude_node.set_value(ua.DataValue(ua.Variant(msg.alt, ua.VariantType.Double)))
-                    await climb_rate_node.set_value(ua.DataValue(ua.Variant(msg.climb, ua.VariantType.Double)))
+                    elif msg_type == 'VFR_HUD':
+                        await airspeed_node.set_value(ua.DataValue(ua.Variant(msg.airspeed, ua.VariantType.Double)))
+                        await groundspeed_node.set_value(ua.DataValue(ua.Variant(msg.groundspeed, ua.VariantType.Double)))
+                        await hud_heading_node.set_value(ua.DataValue(ua.Variant(int(msg.heading), ua.VariantType.Int32)))
+                        await throttle_node.set_value(ua.DataValue(ua.Variant(int(msg.throttle), ua.VariantType.Int32)))
+                        await hud_altitude_node.set_value(ua.DataValue(ua.Variant(msg.alt, ua.VariantType.Double)))
+                        await climb_rate_node.set_value(ua.DataValue(ua.Variant(msg.climb, ua.VariantType.Double)))
 
-                elif msg_type == 'OPEN_DRONE_ID_SYSTEM':
-                    await operator_location_type_node.set_value(ua.DataValue(ua.Variant(int(msg.operator_location_type), ua.VariantType.Int32)))
-                    await classification_type_node.set_value(ua.DataValue(ua.Variant(int(msg.classification_type), ua.VariantType.Int32)))
+                    elif msg_type == 'OPEN_DRONE_ID_SYSTEM':
+                        await operator_location_type_node.set_value(ua.DataValue(ua.Variant(int(msg.operator_location_type), ua.VariantType.Int32)))
+                        await classification_type_node.set_value(ua.DataValue(ua.Variant(int(msg.classification_type), ua.VariantType.Int32)))
+                except Exception as e:
+                    write_success = False
+                    write_error = str(e)[:200]
+                    print(f"Write failed for {msg_type} (seq={current_seq}): {write_error}")
 
                 # End latency timer
                 t_end = time.perf_counter()
@@ -351,7 +378,11 @@ async def main():
                 mem_info = process.memory_info().rss / (1024 * 1024) # Convert bytes to MB
 
                 total_messages_processed += 1
-                arrived_counts[msg_type] += 1
+                if write_success:
+                    total_write_success += 1
+                    arrived_counts[msg_type] += 1
+                else:
+                    total_write_failures += 1
 
                 # 4. Log to CSV
                 writer.writerow([
@@ -362,24 +393,30 @@ async def main():
                     round(queue_wait_ms, 3),
                     round(latency_ms, 3),
                     round(cpu_percent, 2),
-                    round(mem_info, 2)
+                    round(mem_info, 2),
+                    write_success,
+                    write_error,
                 ])
                 # Print a summary to console every 50 messages so you can watch it fail
                 if total_messages_processed % 50 == 0:
                     if expected_counts:
                         expected_total = sum(expected_counts.values())
-                        delivery_pct = (total_messages_processed / expected_total * 100) if expected_total else 0.0
-                        print(f"Processed: {total_messages_processed} | Delivery: {total_messages_processed}/{expected_total} ({delivery_pct:.1f}%) | Last Latency: {latency_ms:.1f}ms")
+                        delivery_pct = (total_write_success / expected_total * 100) if expected_total else 0.0
+                        print(f"Processed: {total_messages_processed} (success: {total_write_success}, write failures: {total_write_failures}) | "
+                              f"Delivery: {total_write_success}/{expected_total} ({delivery_pct:.1f}%) | Last Latency: {latency_ms:.1f}ms")
                     else:
-                        print(f"Processed: {total_messages_processed} | Total Dropped (raw wire-seq, unreliable - see README): {total_dropped} | Last Latency: {latency_ms:.1f}ms")
+                        print(f"Processed: {total_messages_processed} (success: {total_write_success}, write failures: {total_write_failures}) | "
+                              f"Total Dropped (raw wire-seq, unreliable - see README): {total_dropped} | Last Latency: {latency_ms:.1f}ms")
 
     except KeyboardInterrupt:
         print("\nBenchmark stopped by user.")
     except Exception as e:
         print(f"\nGateway crashed: {e}")
     finally:
-        print(f"Final Stats: {total_messages_processed} processed, {total_dropped} dropped "
-              f"(raw wire-seq count - unreliable with the current replay/synth tooling, see README).")
+        write_success_pct = (total_write_success / total_messages_processed * 100) if total_messages_processed else 0.0
+        print(f"Final Stats: {total_messages_processed} processed "
+              f"({total_write_success} write-confirmed [{write_success_pct:.2f}%], {total_write_failures} write failures), "
+              f"{total_dropped} dropped (raw wire-seq count - unreliable with the current replay/synth tooling, see README).")
 
         if expected_counts:
             print("Per-type delivery ratio (arrived / expected from source .tlog, tracked types only):")
