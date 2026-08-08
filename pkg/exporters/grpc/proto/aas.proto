@@ -20,6 +20,11 @@ message UpdateRequest {
     int32 int_val = 5;
     string string_val = 6;
     bool bool_val = 7;
+    // The MAVLink adapter normalizes all signed/unsigned integer telemetry to
+    // int64/uint64 (see pkg/adapters/mavlink normalizeReflectValue), so these
+    // - not int_val - are what most integer properties actually use.
+    int64 int64_val = 8;
+    uint64 uint64_val = 9;
   }
 }
 

@@ -2,17 +2,16 @@
 // versions:
 // 	protoc-gen-go v1.36.10
 // 	protoc        v5.29.3
-// source: proto/aas.proto
+// source: aas.proto
 
 package proto
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -35,6 +34,8 @@ type UpdateRequest struct {
 	//	*UpdateRequest_IntVal
 	//	*UpdateRequest_StringVal
 	//	*UpdateRequest_BoolVal
+	//	*UpdateRequest_Int64Val
+	//	*UpdateRequest_Uint64Val
 	Value         isUpdateRequest_Value `protobuf_oneof:"value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -42,7 +43,7 @@ type UpdateRequest struct {
 
 func (x *UpdateRequest) Reset() {
 	*x = UpdateRequest{}
-	mi := &file_proto_aas_proto_msgTypes[0]
+	mi := &file_aas_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -54,7 +55,7 @@ func (x *UpdateRequest) String() string {
 func (*UpdateRequest) ProtoMessage() {}
 
 func (x *UpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aas_proto_msgTypes[0]
+	mi := &file_aas_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -67,7 +68,7 @@ func (x *UpdateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRequest.ProtoReflect.Descriptor instead.
 func (*UpdateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_aas_proto_rawDescGZIP(), []int{0}
+	return file_aas_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *UpdateRequest) GetSubmodelId() string {
@@ -134,6 +135,24 @@ func (x *UpdateRequest) GetBoolVal() bool {
 	return false
 }
 
+func (x *UpdateRequest) GetInt64Val() int64 {
+	if x != nil {
+		if x, ok := x.Value.(*UpdateRequest_Int64Val); ok {
+			return x.Int64Val
+		}
+	}
+	return 0
+}
+
+func (x *UpdateRequest) GetUint64Val() uint64 {
+	if x != nil {
+		if x, ok := x.Value.(*UpdateRequest_Uint64Val); ok {
+			return x.Uint64Val
+		}
+	}
+	return 0
+}
+
 type isUpdateRequest_Value interface {
 	isUpdateRequest_Value()
 }
@@ -154,6 +173,17 @@ type UpdateRequest_BoolVal struct {
 	BoolVal bool `protobuf:"varint,7,opt,name=bool_val,json=boolVal,proto3,oneof"`
 }
 
+type UpdateRequest_Int64Val struct {
+	// The MAVLink adapter normalizes all signed/unsigned integer telemetry to
+	// int64/uint64 (see pkg/adapters/mavlink normalizeReflectValue), so these
+	// - not int_val - are what most integer properties actually use.
+	Int64Val int64 `protobuf:"varint,8,opt,name=int64_val,json=int64Val,proto3,oneof"`
+}
+
+type UpdateRequest_Uint64Val struct {
+	Uint64Val uint64 `protobuf:"varint,9,opt,name=uint64_val,json=uint64Val,proto3,oneof"`
+}
+
 func (*UpdateRequest_DoubleVal) isUpdateRequest_Value() {}
 
 func (*UpdateRequest_IntVal) isUpdateRequest_Value() {}
@@ -161,6 +191,10 @@ func (*UpdateRequest_IntVal) isUpdateRequest_Value() {}
 func (*UpdateRequest_StringVal) isUpdateRequest_Value() {}
 
 func (*UpdateRequest_BoolVal) isUpdateRequest_Value() {}
+
+func (*UpdateRequest_Int64Val) isUpdateRequest_Value() {}
+
+func (*UpdateRequest_Uint64Val) isUpdateRequest_Value() {}
 
 type IngestResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -172,7 +206,7 @@ type IngestResponse struct {
 
 func (x *IngestResponse) Reset() {
 	*x = IngestResponse{}
-	mi := &file_proto_aas_proto_msgTypes[1]
+	mi := &file_aas_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -184,7 +218,7 @@ func (x *IngestResponse) String() string {
 func (*IngestResponse) ProtoMessage() {}
 
 func (x *IngestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_aas_proto_msgTypes[1]
+	mi := &file_aas_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -197,7 +231,7 @@ func (x *IngestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestResponse.ProtoReflect.Descriptor instead.
 func (*IngestResponse) Descriptor() ([]byte, []int) {
-	return file_proto_aas_proto_rawDescGZIP(), []int{1}
+	return file_aas_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *IngestResponse) GetSuccess() bool {
@@ -214,11 +248,11 @@ func (x *IngestResponse) GetMessage() string {
 	return ""
 }
 
-var File_proto_aas_proto protoreflect.FileDescriptor
+var File_aas_proto protoreflect.FileDescriptor
 
-const file_proto_aas_proto_rawDesc = "" +
+const file_aas_proto_rawDesc = "" +
 	"\n" +
-	"\x0fproto/aas.proto\x12\x03aas\"\xfb\x01\n" +
+	"\taas.proto\x12\x03aas\"\xbb\x02\n" +
 	"\rUpdateRequest\x12\x1f\n" +
 	"\vsubmodel_id\x18\x01 \x01(\tR\n" +
 	"submodelId\x12#\n" +
@@ -229,7 +263,10 @@ const file_proto_aas_proto_rawDesc = "" +
 	"\aint_val\x18\x05 \x01(\x05H\x00R\x06intVal\x12\x1f\n" +
 	"\n" +
 	"string_val\x18\x06 \x01(\tH\x00R\tstringVal\x12\x1b\n" +
-	"\bbool_val\x18\a \x01(\bH\x00R\aboolValB\a\n" +
+	"\bbool_val\x18\a \x01(\bH\x00R\aboolVal\x12\x1d\n" +
+	"\tint64_val\x18\b \x01(\x03H\x00R\bint64Val\x12\x1f\n" +
+	"\n" +
+	"uint64_val\x18\t \x01(\x04H\x00R\tuint64ValB\a\n" +
 	"\x05value\"D\n" +
 	"\x0eIngestResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
@@ -238,23 +275,23 @@ const file_proto_aas_proto_rawDesc = "" +
 	"\rStreamUpdates\x12\x12.aas.UpdateRequest\x1a\x13.aas.IngestResponse(\x01B,Z*uav-aas-connector/pkg/exporters/grpc/protob\x06proto3"
 
 var (
-	file_proto_aas_proto_rawDescOnce sync.Once
-	file_proto_aas_proto_rawDescData []byte
+	file_aas_proto_rawDescOnce sync.Once
+	file_aas_proto_rawDescData []byte
 )
 
-func file_proto_aas_proto_rawDescGZIP() []byte {
-	file_proto_aas_proto_rawDescOnce.Do(func() {
-		file_proto_aas_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_aas_proto_rawDesc), len(file_proto_aas_proto_rawDesc)))
+func file_aas_proto_rawDescGZIP() []byte {
+	file_aas_proto_rawDescOnce.Do(func() {
+		file_aas_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_aas_proto_rawDesc), len(file_aas_proto_rawDesc)))
 	})
-	return file_proto_aas_proto_rawDescData
+	return file_aas_proto_rawDescData
 }
 
-var file_proto_aas_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_proto_aas_proto_goTypes = []any{
+var file_aas_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_aas_proto_goTypes = []any{
 	(*UpdateRequest)(nil),  // 0: aas.UpdateRequest
 	(*IngestResponse)(nil), // 1: aas.IngestResponse
 }
-var file_proto_aas_proto_depIdxs = []int32{
+var file_aas_proto_depIdxs = []int32{
 	0, // 0: aas.AASIngest.StreamUpdates:input_type -> aas.UpdateRequest
 	1, // 1: aas.AASIngest.StreamUpdates:output_type -> aas.IngestResponse
 	1, // [1:2] is the sub-list for method output_type
@@ -264,32 +301,34 @@ var file_proto_aas_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_proto_aas_proto_init() }
-func file_proto_aas_proto_init() {
-	if File_proto_aas_proto != nil {
+func init() { file_aas_proto_init() }
+func file_aas_proto_init() {
+	if File_aas_proto != nil {
 		return
 	}
-	file_proto_aas_proto_msgTypes[0].OneofWrappers = []any{
+	file_aas_proto_msgTypes[0].OneofWrappers = []any{
 		(*UpdateRequest_DoubleVal)(nil),
 		(*UpdateRequest_IntVal)(nil),
 		(*UpdateRequest_StringVal)(nil),
 		(*UpdateRequest_BoolVal)(nil),
+		(*UpdateRequest_Int64Val)(nil),
+		(*UpdateRequest_Uint64Val)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_aas_proto_rawDesc), len(file_proto_aas_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_aas_proto_rawDesc), len(file_aas_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_aas_proto_goTypes,
-		DependencyIndexes: file_proto_aas_proto_depIdxs,
-		MessageInfos:      file_proto_aas_proto_msgTypes,
+		GoTypes:           file_aas_proto_goTypes,
+		DependencyIndexes: file_aas_proto_depIdxs,
+		MessageInfos:      file_aas_proto_msgTypes,
 	}.Build()
-	File_proto_aas_proto = out.File
-	file_proto_aas_proto_goTypes = nil
-	file_proto_aas_proto_depIdxs = nil
+	File_aas_proto = out.File
+	file_aas_proto_goTypes = nil
+	file_aas_proto_depIdxs = nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -26,6 +27,13 @@ type Exporter struct {
 	host     string
 	security config.SecurityConfig
 	drops    *instrumentation.Counter // events dropped because sendChan was full
+
+	// wg tracks the sendLoop goroutine, which is the exclusive owner of
+	// stream while it runs. Stop waits on it before touching stream/conn -
+	// gRPC does not allow CloseSend to run concurrently with Send (see
+	// google.golang.org/grpc's stream.go), and without this handshake Stop
+	// could race a live Send from another goroutine.
+	wg sync.WaitGroup
 }
 
 func NewExporter(cfg config.ExporterConfig) (*Exporter, error) {
@@ -63,7 +71,11 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	// property collapse to the latest one (bounded by property count) rather
 	// than the freshest values being dropped when a queue fills.
 	co := coalesce.New(instrumentation.CoalescedCounter("exporter.grpc"))
-	go e.sendLoop(ctx, co)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.sendLoop(ctx, co)
+	}()
 
 	for {
 		select {
@@ -168,9 +180,21 @@ func buildRequest(event *core.AASUpdateEvent) *pb.UpdateRequest {
 	case float32:
 		req.Value = &pb.UpdateRequest_DoubleVal{DoubleVal: float64(v)}
 	case int:
-		req.Value = &pb.UpdateRequest_IntVal{IntVal: int32(v)}
+		req.Value = &pb.UpdateRequest_Int64Val{Int64Val: int64(v)}
 	case int32:
 		req.Value = &pb.UpdateRequest_IntVal{IntVal: v}
+	// The MAVLink adapter normalizes all signed/unsigned integer telemetry to
+	// int64/uint64 (see pkg/adapters/mavlink normalizeReflectValue), so these
+	// two cases - not int/int32 above - are what most integer properties
+	// arriving from the pipeline actually hit.
+	case int64:
+		req.Value = &pb.UpdateRequest_Int64Val{Int64Val: v}
+	case uint32:
+		req.Value = &pb.UpdateRequest_Uint64Val{Uint64Val: uint64(v)}
+	case uint64:
+		req.Value = &pb.UpdateRequest_Uint64Val{Uint64Val: v}
+	case uint:
+		req.Value = &pb.UpdateRequest_Uint64Val{Uint64Val: uint64(v)}
 	case string:
 		req.Value = &pb.UpdateRequest_StringVal{StringVal: v}
 	case bool:
@@ -182,7 +206,13 @@ func buildRequest(event *core.AASUpdateEvent) *pb.UpdateRequest {
 	return req
 }
 
+// Stop waits for the sendLoop goroutine to exit, then closes the stream and
+// connection. As with the other exporters, Stop must be called after the
+// context passed to Start has been canceled - otherwise this blocks on the
+// WaitGroup waiting for sendLoop to observe that cancellation.
 func (e *Exporter) Stop() error {
+	e.wg.Wait()
+
 	if e.stream != nil {
 		e.stream.CloseSend()
 	}
