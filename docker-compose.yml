@@ -4,9 +4,9 @@ services:
     container_name: uav-aas-connector
     restart: unless-stopped
     
-    devices:
-        - "/dev/ttyUSB0:/dev/ttyUSB0" # Radio
-        - "/dev/ttyAMA0:/dev/ttyAMA0" # UART
+    # devices:
+        # - "/dev/ttyUSB0:/dev/ttyUSB0" # Radio
+        # - "/dev/ttyAMA0:/dev/ttyAMA0" # UART
     user: root
     
     # Mount the local config directory into the container.
@@ -16,18 +16,18 @@ services:
       - ./config:/app/config
       - ./metrics:/app/metrics
 
-    ports:
-      # Input: MAVLink
-      - "14550:14550/udp"
+    # ports:
+      # # Input: MAVLink
+      # - "14550:14550/udp"
       
-      # Output: HTTP Exporter
-      - "8080:8080"
+      # # Output: HTTP Exporter
+      # - "8080:8080"
       
-      # Output: OPC UA Exporter
-      - "4840:4840"
+      # # Output: OPC UA Exporter
+      # - "4840:4840"
 
     # 'host' network mode is faster for high-frequency UDP as it bypasses the Docker NAT. 
-    # network_mode: host
+    network_mode: host
 
   metrics-collector:
     build: ./resource_metrics
@@ -37,6 +37,5 @@ services:
       - ./metrics:/output
     environment:
       - TARGET_CONTAINER=uav-aas-connector
-      - DURATION_SEC=660
       - INTERVAL_SEC=0.5
     restart: "no"
