@@ -274,3 +274,6 @@ metrics_received/
 pki/ 
 
 
+
+# compiled monitor binary
+resource_metrics/monitor/monitor_uav
