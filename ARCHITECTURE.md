@@ -136,7 +136,7 @@ type MappingEntry struct {
 
 
 
-## 6. Extension Guide for Agents
+## 6. Extension Guide
 
 ### How to add a new Input Adapter
 
