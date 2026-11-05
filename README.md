@@ -122,3 +122,26 @@ MavProxy: redirect MAVLink from SITL to the connector:
 ```bash
 mavproxy.py --master=udpin:127.0.0.1:14550 --out=udpout:raspberrypi.local:14550
 ```
+
+
+## Run Experiments
+
+### Mac — terminal 1
+```bash
+python opcua_server.py quad_op.nodeset.xml 4841
+```
+
+### Pi — connector with opcua_client → Mac IP:4841
+```bash
+./uav-aas-connector
+```
+
+### Mac — terminal 2
+```bash
+python3 replay.py synthetic_200hz.tlog --ip <pi-ip> --port 14550 --log dispatch_log.csv
+```
+
+### Mac — analyze
+```bash
+python3 latency-calculate.py dispatch_log.csv opcua_ros_log4841.csv
+```
