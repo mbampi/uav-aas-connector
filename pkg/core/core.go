@@ -283,8 +283,7 @@ func (c *AASCore) updateModel(ev *AASUpdateEvent) {
 
 // broadcast fans updateEvent out to all subscribers. Sends are non-blocking: a
 // slow/stuck exporter never stalls ingestion or other exporters, at the cost of
-// dropping updates for that subscriber. Each drop is counted per-subscriber
-// (see ReportDrops) so the previously silent loss is now visible by name.
+// dropping updates for that subscriber. Drops are counted per subscriber.
 func (c *AASCore) broadcast(updateEvent *AASUpdateEvent) {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()

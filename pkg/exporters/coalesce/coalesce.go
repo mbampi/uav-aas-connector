@@ -1,16 +1,7 @@
-// Package coalesce provides a latest-value-per-property pending buffer that
-// decouples a fast producer (the core's broadcast) from a slow consumer (a
-// network exporter) without dropping the freshest value.
-//
-// When the consumer can't keep up, a plain bounded queue must choose an end to
-// drop. Dropping the newest value is the wrong choice for latest-value
-// telemetry: under sustained overload the queue stays full of stale values and
-// every fresh one is thrown away, so downstream converges on old data exactly
-// when it is changing fastest. A Coalescer instead keeps only the latest value
-// per property, so memory is bounded by the number of distinct properties (not
-// the arrival rate) and the consumer always sees the freshest value. This is
-// the same coalescing the opcua_client exporter already does inline; extracting
-// it here lets the gRPC and MQTT exporters share it.
+// Package coalesce provides a latest-value-per-property buffer between a fast
+// producer (the core's broadcast) and a slow consumer (a network exporter).
+// Memory is bounded by the number of properties, and the consumer always gets
+// the freshest value.
 //
 // Usage is a producer calling Put and a single consumer looping on WaitDrain:
 //

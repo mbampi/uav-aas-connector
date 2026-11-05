@@ -32,17 +32,13 @@ func (c *Counter) Add(n uint64) { c.n.Add(n) }
 // Value returns the running total.
 func (c *Counter) Value() uint64 { return c.n.Load() }
 
-// Two backpressure registries, tracking distinct outcomes when a stage can't
-// forward an event as-is:
+// Backpressure registries:
 //
-//   - dropCounters:      the event was discarded entirely — actual data loss.
-//   - coalescedCounters: the event was superseded by a newer value for the same
-//     property before it could be sent. Only intermediate values are lost; the
-//     latest is always kept. For latest-value telemetry this is the desired
-//     behavior under load, but the rate is still a useful backpressure signal.
+//   - dropCounters: the event was discarded (data loss).
+//   - coalescedCounters: the event was replaced by a newer value for the same
+//     property before being sent (the latest is kept).
 //
-// Like stageStats, the set of names in each is small and fixed shortly after
-// startup, so steady-state reads are a lock-free Load with no allocation.
+// Names are fixed shortly after startup, so reads are a lock-free Load.
 var (
 	dropCounters      sync.Map
 	coalescedCounters sync.Map
@@ -93,16 +89,8 @@ func DropSnapshot() []CounterValue { return snapshotOf(&dropCounters) }
 func CoalescedSnapshot() []CounterValue { return snapshotOf(&coalescedCounters) }
 
 // ReportBackpressure periodically logs drop/coalesce counters whose totals grew
-// since the previous tick, so a degraded exporter or link surfaces in the log
-// within one interval while a healthy system stays silent. It is effectively a
-// per-site rate-limited log, replacing the per-event logs that previously
-// flooded the log under sustained congestion. Drops are logged at Warn (data
-// loss); coalesces at Info (backpressure, but the latest value is preserved).
-// It runs until ctx is canceled.
-//
-// It does not depend on Init having succeeded: the counters are independent of
-// the latency-log file, so this observability works even if that file could not
-// be opened.
+// since the previous tick. Drops are logged at Warn, coalesces at Info. It runs
+// until ctx is canceled and doesn't depend on Init having succeeded.
 func ReportBackpressure(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = DefaultBackpressureReportInterval

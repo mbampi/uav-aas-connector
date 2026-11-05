@@ -31,55 +31,53 @@ The connector, by contrast (`pkg/core/core.go`, `pkg/exporters/coalesce`):
 
 ## Why the comparison is fair
 
-- **Same translation task.** Same MAVLink message set, same scaling (cA->A,
+- Same translation task: same MAVLink message set, same scaling (cA->A,
   cdeg->deg, `voltage_battery` sentinel), same OPC UA node paths and MQTT
   topic/payload shape as the connector's exporters.
   `basyx-baseline/aas_definitions/uav_environment.json` is generated from
   `config/aas/quad_op.json` (same 7 submodels, ids and properties).
-- **Same resource measurement.** Every baseline uses the same Docker-stats
+- Same resource measurement: every baseline uses the same Docker-stats
   sidecar as the connector (`resource_metrics/resource_metrics.py`). The
   Docker-stats CSV is the CPU/memory number to report; the in-process `psutil`
   columns are a secondary, differently-sampled signal.
-- **Per-message try/except.** It only keeps a single transient failure from
-  ending a 15-minute run. Writes stay sequential and unbatched, with no retry.
-- **Same security mode.** The connector defaults to `SecurityMode=None` and
+- The per-message try/except only keeps a transient failure from ending a
+  15-minute run. Writes stay sequential and unbatched, with no retry.
+- Same security mode: the connector defaults to `SecurityMode=None` and
   anonymous auth (`config/config.yaml`), like all baselines. If `tlsEnabled`
   is turned on for the connector in a run, this no longer holds.
-- **`requests.Session()` in the BaSyx bridge is required, not an
-  optimization.** At 200 Hz the naive bridge sends ~700 PATCHes/s; without
-  keep-alive it runs out of ephemeral ports. The bridge is sequential, so the
-  default pool size is enough and is not tuned.
+- The BaSyx bridge needs `requests.Session()`: at 200 Hz it sends ~700
+  PATCHes/s and runs out of ephemeral ports without keep-alive. The default
+  pool size is not tuned.
 
 ## Known asymmetries
 
-- **Reconnection.** `main.py` (OPC UA) and `bridge.py` (BaSyx) have none.
+- Reconnection: `main.py` (OPC UA) and `bridge.py` (BaSyx) have none.
   `main_mqtt.py` gets auto-reconnect from paho-mqtt's defaults. When comparing
   resilience, group them as "OPC UA + BaSyx: none" vs "MQTT: library default",
   not as an OPC UA vs MQTT finding.
-- **BaSyx runs two components on the Pi** (the JVM and the bridge), so it
-  gets two resource CSVs (`basyx-aas-env_*.csv`, `basyx-bridge_*.csv`).
+- BaSyx runs two components on the Pi (the JVM and the bridge), so it gets
+  two resource CSVs (`basyx-aas-env_*.csv`, `basyx-bridge_*.csv`).
   Report both, not only their sum.
-- **BaSyx per-property cost.** Each value is an HTTP round trip with JSON on
+- BaSyx per-property cost: each value is an HTTP round trip with JSON on
   both ends; the AAS REST API has no scalar-write fast path like OPC UA's
   node write. This is a protocol cost, not a bridge implementation issue.
-- **BaSyx MQTT payloads are larger** (whole `SubmodelElement` JSON vs the
+- BaSyx MQTT payloads are larger (whole `SubmodelElement` JSON vs the
   connector's `{"value":...,"timestamp":...}`) and carry no timestamp, so
   BaSyx latency is computed with the sequence-number method
   (`latency-calculate.py`).
 
 ## Threats to validity
 
-1. **Language/runtime confound.** Go vs Python (and the JVM, for BaSyx) sits
-   on top of the architectural difference. The framing used is "what a
-   practitioner would reach for to prototype this", which should be stated
-   explicitly. A naive single-threaded Go ablation would separate the two if
-   a reviewer asks; it is not implemented.
-2. **BaSyx resource numbers are a lower bound.** `basyx.backend=InMemory`, no
+1. Language/runtime confound: Go vs Python (and the JVM, for BaSyx) sits on
+   top of the architectural difference. The framing used is "what a
+   practitioner would reach for to prototype this". A naive single-threaded Go
+   version would separate the two; it is not implemented.
+2. BaSyx resource numbers are a lower bound: `basyx.backend=InMemory`, no
    MongoDB, no registries. That is BaSyx's default and its cheapest
    deployment; a production setup would cost more.
-3. **BaSyx MQTT eventing is always on**, because it is needed for latency
+3. BaSyx MQTT eventing is always on, because it is needed for latency
    measurement. Reported CPU/memory includes it.
-4. **The naive BaSyx throughput number measures the bridge**, not BaSyx.
+4. The naive BaSyx throughput number measures the bridge, not BaSyx.
    `bridge_batched.py` exists to measure what BaSyx's API allows when
    requests are batched per submodel and pipelined; always say which bridge
    produced a number.

@@ -18,11 +18,8 @@ import paho.mqtt.client as mqtt
 # the Raspberry Pi) without editing this file or rebuilding the image.
 MAVLINK_CONNECTION_STRING = os.environ.get('MAVLINK_CONNECTION_STRING', 'udp:0.0.0.0:14550')
 MQTT_BROKER_URL = os.environ.get('MQTT_BROKER_URL', 'tcp://127.0.0.1:1883')
-# Same topic prefix as the Go connector's config.yaml (mqtt.topicPrefix), on
-# purpose: this lets the same external MQTT subscriber/logging tool used to
-# validate the connector's runs (see uav-aas-tools/mqtt_receiver) be reused
-# unmodified against this baseline, exactly as the OPC UA variant reuses the
-# same quad_op.nodeset.xml node paths as the connector for the same reason.
+# Same topic prefix as the Go connector's config.yaml (mqtt.topicPrefix), so the
+# same subscriber (uav-aas-tools/mqtt_receiver) works with both.
 MQTT_TOPIC_PREFIX = os.environ.get('MQTT_TOPIC_PREFIX', 'aas/uav-1').rstrip('/')
 MQTT_CLIENT_ID = os.environ.get('MQTT_CLIENT_ID', 'python-baseline-mqtt-01')
 CSV_FILENAME = os.environ.get('CSV_FILENAME', 'naive_baseline_mqtt_metrics.csv')
@@ -34,11 +31,7 @@ MQTT_CONNECT_TIMEOUT_S = 10
 # (pkg/exporters/mqtt/mqtt.go, publish()).
 MQTT_PUBLISH_WAIT_S = 2.0
 
-# Optional: path to the exact .tlog file being fed to this gateway via
-# mavlink-replay's replay.py (read-only reference, not a live connection).
-# See main.py's identical comment for why the wire sequence number
-# (Dropped_Since_Last below) can't be trusted with the current replay/synth
-# tooling, and why this pre-scan-based ratio is used instead.
+# Optional: the .tlog file fed to replay.py, see main.py.
 SOURCE_TLOG_PATH = os.environ.get('SOURCE_TLOG_PATH')
 
 # MAVLink's documented sentinel for "field not populated" on voltage_battery.
@@ -100,9 +93,7 @@ def b64_submodel(id_short):
     return base64.urlsafe_b64encode(id_short.encode()).decode()
 
 
-# Precomputed once, matching each Submodel idShort used below (Section III's
-# seven Submodels; Identification/Status/Power/Navigation/Attitude/Actuation/
-# HUD all appear in the message set this baseline tracks).
+# Precomputed once, matching each Submodel idShort used below.
 SUBMODEL_B64 = {name: b64_submodel(name) for name in
                 ['Identification', 'Status', 'Power', 'Navigation', 'Attitude', 'Actuation', 'HUD']}
 
@@ -117,13 +108,8 @@ def topic_for(submodel_id_short, property_path):
 
 
 def build_payload(value, timestamp):
-    """{"value":<v>,"timestamp":"<iso8601>"}, the same two fields and shape
-    as the Go connector's encodePayload (mqtt.go), built with plain
-    json.dumps rather than the Go side's hand-rolled, reflection-free
-    encoder - intentionally: this baseline is meant to represent the
-    generic-serialization path a naive implementation would reach for, which
-    is exactly the cost the Go connector's zero-reflection encoding (Section
-    IV-E) is contrasted against."""
+    """{"value":<v>,"timestamp":"<iso8601>"}, same shape as encodePayload in
+    the connector's mqtt.go, but using plain json.dumps."""
     return json.dumps({"value": value, "timestamp": timestamp.isoformat().replace("+00:00", "Z")})
 
 
@@ -169,16 +155,9 @@ def main():
     client.on_disconnect = on_disconnect
 
     client.connect(broker_host, broker_port, keepalive=60)
-    # loop_start() runs paho's network I/O on its own background thread -
-    # required for any use of this library (there is no purely single-thread
-    # way to drive it while also doing blocking pymavlink reads below) - but
-    # message translation and the publish() calls themselves stay entirely
-    # sequential on the main thread, one message at a time, with no worker
-    # pool, batching, or coalescing. That sequential, blocking-per-message
-    # path - not the literal OS thread count - is the "naive" property this
-    # baseline is built to demonstrate, matching the OPC UA variant's use of
-    # asyncua's own internally-threaded/event-loop-driven I/O for the same
-    # reason.
+    # loop_start() runs paho's network I/O on its own thread (the library needs
+    # it alongside blocking pymavlink reads). Translation and publish() stay
+    # sequential on the main thread.
     client.loop_start()
 
     if not connected_event.wait(timeout=MQTT_CONNECT_TIMEOUT_S):
@@ -243,15 +222,9 @@ def main():
                 queue_wait_ms = (t_start - t_prev_end) * 1000
 
                 # 3. Hardcoded Translation & Blocking Publishes.
-                # Scaling and target Submodel/property paths below mirror
-                # config/mappings/mavlink_ops.yaml exactly, field for field
-                # identical to main.py's OPC UA node writes - only the sink
-                # (an MQTT publish + bounded wait, instead of an OPC UA
-                # set_value) differs. Like main.py, MAVLink "unknown"
-                # sentinel values (e.g. eph/hdg/satellites_visible at their
-                # UINT16_MAX default) are NOT filtered out here - they are
-                # scaled and published through as-is, except voltage_battery,
-                # which is special-cased below exactly as in main.py.
+                # Scaling and paths mirror config/mappings/mavlink_ops.yaml, same
+                # as main.py. "Unknown" sentinels (e.g. eph/hdg at UINT16_MAX) are
+                # published as-is, except voltage_battery below.
                 now = None
 
                 def pub(submodel, path, value):
@@ -270,23 +243,9 @@ def main():
                         # paho exception (queue full, send error, etc.) below.
                         raise RuntimeError(f"publish not confirmed within {MQTT_PUBLISH_WAIT_S}s (mid={info.mid})")
 
-                # Wrapped per message, not per run: without this, a single
-                # publish failure - a stalled/unconfirmed QoS 0 send (see pub()
-                # above), a queue-full error, or anything else paho raises -
-                # would propagate out of the whole loop and end a 15-minute
-                # benchmark on one bad publish. This does not make the gateway
-                # any less naive: publishes remain sequential, blocking, and
-                # unbatched (no coalescing, no worker pool); a mid-message
-                # failure still abandons whatever fields of that message were
-                # not yet published (no per-field recovery); and there is still
-                # no application-level reconnection logic beyond paho's own
-                # automatic TCP reconnect, so a broker outage still shows up
-                # honestly as a run of consecutive failures. It only stops one
-                # bad publish from discarding an otherwise-good run, and gives
-                # Write_Success below a real per-message signal instead of
-                # every logged row being unconditionally "successful" by
-                # construction - see main.py's identical comment for the OPC
-                # UA side of the same fix.
+                # Wrapped per message: one failed publish (stalled QoS 0 send, full
+                # queue) shouldn't end a 15-minute run. Publishes stay sequential,
+                # with no per-field recovery and only paho's own TCP reconnect.
                 write_success = True
                 write_error = ""
                 try:

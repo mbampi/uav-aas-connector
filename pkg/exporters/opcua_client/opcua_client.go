@@ -18,29 +18,14 @@ import (
 	"github.com/gopcua/opcua/ua"
 )
 
-// defaultMaxConcurrentWrites bounds how many OPC UA WriteRequests can be
-// in flight at once. The gopcua secure channel already multiplexes concurrent
-// requests safely (each gets its own request ID and response handler), so
-// this is purely a backpressure knob against the remote server, not a
-// correctness requirement.
-//
-// It does NOT provide real parallelism against a single OPC UA endpoint:
-// gopcua serializes every Write on the secure channel's instance lock
-// (encode+encrypt+socket-write happen under one mutex), and a typical OPC UA
-// server (e.g. python-asyncua) processes requests on a single event loop.
-// Raising this only lets more, smaller batches be dispatched concurrently -
-// see minBatchInterval, which is what actually controls batch size.
+// defaultMaxConcurrentWrites bounds the WriteRequests in flight. gopcua serializes
+// writes on the secure channel and servers like python-asyncua use a single event
+// loop, so this isn't real parallelism. Batch size comes from minBatchInterval.
 const defaultMaxConcurrentWrites = 2
 
-// defaultMinBatchInterval floors how often networkWorker drains
-// pendingUpdates, independent of maxConcurrentWrites. Without this floor,
-// a large maxConcurrentWrites lets the drain loop fire on almost every
-// triggerChan wakeup - fragmenting updates into many tiny WriteRequests
-// instead of coalescing them. Since the remote endpoint is effectively
-// single-lane (see defaultMaxConcurrentWrites), more, smaller requests just
-// queue up behind each other, inflating write latency instead of reducing
-// it. This interval guarantees a minimum coalescing window regardless of
-// how many concurrent writers are configured.
+// defaultMinBatchInterval is the minimum time between drains of pendingUpdates.
+// Without it, a large maxConcurrentWrites splits updates into many small requests
+// that just queue up at the server.
 const defaultMinBatchInterval = 3 * time.Millisecond
 
 // Exporter implements an OPC UA output exporter for the UAV AAS Connector.
@@ -51,10 +36,7 @@ type Exporter struct {
 
 	namespace uint16
 
-	// typeCache and nodeIDCache are read/written by every in-flight write
-	// goroutine (see networkWorker), so unlike a single-writer cache they
-	// need their own lock rather than relying on the pendingMu/networkWorker
-	// serialization that used to make this safe.
+	// typeCache and nodeIDCache are shared by all write goroutines.
 	cacheMu     sync.RWMutex
 	typeCache   map[string]aastypes.DataTypeDefXSD
 	nodeIDCache map[string]*ua.NodeID
@@ -63,18 +45,10 @@ type Exporter struct {
 	enableDedup bool
 	maxAge      time.Duration
 
-	// maxConcurrentWrites bounds the number of WriteRequests in flight at
-	// once (see networkWorker). A single blocking write serializes every
-	// batch behind whatever the current round-trip happens to take, so one
-	// slow write inflates the queueing latency of everything queued behind
-	// it; pipelining a few writes hides that tail instead of paying it once
-	// per batch.
+	// maxConcurrentWrites bounds the WriteRequests in flight (see networkWorker).
 	maxConcurrentWrites int
 
-	// minBatchInterval floors how often networkWorker drains pendingUpdates
-	// (see defaultMinBatchInterval). This is what actually controls batch
-	// size; maxConcurrentWrites only controls how many of those batches can
-	// be in flight at once.
+	// minBatchInterval is the minimum time between drains (see defaultMinBatchInterval).
 	minBatchInterval time.Duration
 
 	// Decoupling components
@@ -197,12 +171,8 @@ func (e *Exporter) Stop() error {
 
 // networkWorker handles OPC UA writes. It protects the ingestion loop from network latency.
 //
-// Batches are dispatched to a bounded pool of goroutines rather than sent
-// one-at-a-time: a single blocking client.Write call serializes every batch
-// behind whatever round-trip time the current write happens to hit, so one
-// slow write (network jitter, a busy remote server) inflates the queueing
-// latency of every batch formed while it's in flight. Pipelining a few
-// writes concurrently hides that tail instead of paying it once per batch.
+// Batches go to a bounded pool of goroutines, so one slow write doesn't delay every
+// batch formed behind it.
 func (e *Exporter) networkWorker(ctx context.Context) {
 	sem := make(chan struct{}, e.maxConcurrentWrites)
 	var wg sync.WaitGroup

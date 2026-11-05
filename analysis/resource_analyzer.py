@@ -1,33 +1,16 @@
-"""Analyzes CPU/Memory usage CSVs produced by resource_metrics/resource_metrics.py,
-the Docker-stats-based sidecar used to monitor both the Go connector and the
-Python baseline gateways (see baseline/python-baseline-conn/README.md's
-"Resource Monitoring" section - same script, same formulas, same schema,
-for both).
+"""Analyzes CPU/Memory CSVs from resource_metrics/resource_metrics.py, the
+Docker-stats sidecar used for both the Go connector and the Python baselines.
 
-Filtering (ON by default; see --no-zero-filter):
-Rows with Memory_Bytes == 0 are excluded before computing statistics. A
-memory reading of exactly 0 bytes is not physically meaningful for a live
-process. Investigating this for the connector's own dissertation_exps data
-found these rows are produced by the sidecar continuing to poll the target
-container for a period after it has already been stopped for teardown
-between successive runs - see EXPERIMENTS_SUMMARY.md Section 6 for the full
-root-cause writeup. Confirmed there: 0% of samples recorded strictly within
-the actual dispatch/test window are ever affected, in every run checked; the
-zero-reading rows are 100% confined to that post-test tail.
+Filtering (on by default, see --no-zero-filter): rows with Memory_Bytes == 0
+are excluded. They come from the sidecar polling after the target container
+has been stopped between runs.
 
-Optional window alignment (--align-to):
-The zero-reading filter above does not catch the few genuinely-valid,
-near-idle samples recorded in the gap between dispatch ending and the
-container actually being stopped (real CPU~0%, real nonzero memory - the
-process was legitimately idle, just not during the test). For a fully
-rigorous exclusion of that whole post-test tail, not just its later
-zero-reading portion, pass the companion log/CSV from the SAME run that
-defines the actual test window:
+Window alignment (--align-to): also drops the near-idle samples between the end
+of dispatch and the container stopping. Pass the log/CSV from the same run:
   - a connector latency_*.log (header: ProcessTimestamp_ns,Stage,PropertyID,TraceID_ns)
   - or a baseline naive_baseline_*.csv (header: System_Time,Message_Type,...)
-Format is auto-detected from the header line. Only resource samples whose
-Timestamp falls within [window_start, window_end] of that companion file are
-kept.
+The format is detected from the header. Only samples whose Timestamp falls in
+that file's time range are kept.
 """
 import argparse
 import csv

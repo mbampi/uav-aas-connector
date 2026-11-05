@@ -20,17 +20,9 @@ OPCUA_SERVER_ENDPOINT = os.environ.get('OPCUA_SERVER_ENDPOINT', 'opc.tcp://127.0
 CSV_FILENAME = os.environ.get('CSV_FILENAME', 'naive_baseline_metrics.csv')
 HEARTBEAT_TIMEOUT_S = 10
 
-# Optional: path to the exact .tlog file being fed to this gateway via
-# mavlink-replay's replay.py (read-only reference, not a live connection).
-# replay.py sends every message in that file exactly once with no filtering,
-# so a full pre-scan of it gives an exact, ground-truth per-message-type
-# expected count for the run - independent of MAVLink's wire sequence
-# number, which the current synth.py/replay.py never advance (both call
-# msg.pack() without ever calling mav.send(), so pymavlink's seq counter -
-# only incremented inside send() - stays at 0 for every packet on the wire).
-# That makes header-seq-based drop counting meaningless with this tooling
-# today. Leave unset for live/physical-drone deployments, where there is no
-# reference file to compare against.
+# Optional: the .tlog file fed to replay.py. A pre-scan gives the expected count
+# per message type. Needed because synth.py/replay.py never call mav.send(), so
+# the MAVLink seq stays 0 on the wire. Leave unset for live drones.
 SOURCE_TLOG_PATH = os.environ.get('SOURCE_TLOG_PATH')
 
 # MAVLink's documented sentinel for "field not populated" on voltage_battery.
@@ -70,10 +62,7 @@ def scan_expected_counts(tlog_path, tracked_types):
     return counts
 
 async def main():
-    # Bound up front so the `finally` block below can always reference them,
-    # even if we crash before the main loop starts. Previously these were
-    # only assigned deep inside the try block, so a failure during connect()
-    # raised an UnboundLocalError from `finally` that masked the real error.
+    # Bound up front so the `finally` block below can always reference them.
     total_messages_processed = 0
     total_write_success = 0
     total_write_failures = 0
@@ -244,31 +233,14 @@ async def main():
                 queue_wait_ms = (t_start - t_prev_end) * 1000
 
                 # 3. Hardcoded Translation & Blocking Writes.
-                # Scaling and target OPC UA types below mirror
-                # config/mappings/mavlink_ops.yaml + quad_op.nodeset.xml exactly:
-                # like the Go connector, MAVLink "unknown" sentinel values (e.g.
-                # eph/hdg/satellites_visible at their UINT16_MAX default) are NOT
-                # filtered out here - they're scaled and written through as-is,
-                # except voltage_battery below, which was already special-cased
-                # before this change and is left as-is.
+                # Scaling and OPC UA types mirror config/mappings/mavlink_ops.yaml
+                # and quad_op.nodeset.xml. Like the Go connector, "unknown"
+                # sentinels (e.g. eph/hdg at UINT16_MAX) are written as-is, except
+                # voltage_battery below.
                 #
-                # Wrapped per message, not per run: asyncua raises on a failed
-                # write (Node.write_attribute() calls result[0].check(), which
-                # raises ua.UaStatusCodeError on a bad status code), so without
-                # this a single transient write error - plausible over a real,
-                # non-loopback LAN hop to the OPC UA server across a 15-minute
-                # run - would otherwise propagate out of the whole loop and end
-                # the benchmark, discarding all data collected up to that point.
-                # This does not make the gateway any less naive: writes are
-                # still sequential, blocking, and unbatched; a mid-message
-                # failure still abandons whatever fields of that message were
-                # not yet written (no per-field recovery), and there is still
-                # no reconnection logic, so a truly dead connection shows up
-                # honestly as a run of consecutive failures rather than being
-                # silently recovered from. It only stops one bad write from
-                # discarding an otherwise-good run, and gives Write_Success
-                # below a real per-message signal instead of every logged row
-                # being unconditionally "successful" by construction.
+                # Wrapped per message: asyncua raises on a bad status code, and
+                # one transient write error shouldn't end a 15-minute run. Writes
+                # stay sequential, with no per-field recovery and no reconnection.
                 write_success = True
                 write_error = ""
                 try:

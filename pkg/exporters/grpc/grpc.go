@@ -64,12 +64,8 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	e.conn = conn
 	e.client = pb.NewAASIngestClient(conn)
 
-	// Decouple ingestion from the network: a dedicated goroutine owns the
-	// stream and performs the (potentially blocking) Send, while this loop only
-	// feeds a coalescer. A slow or stuck network can no longer stall inChan and
-	// make the core drop updates for this exporter; instead, updates to the same
-	// property collapse to the latest one (bounded by property count) rather
-	// than the freshest values being dropped when a queue fills.
+	// A dedicated goroutine owns the stream and does the blocking Send. This loop
+	// only feeds a coalescer, so a slow network can't stall inChan.
 	co := coalesce.New(instrumentation.CoalescedCounter("exporter.grpc"))
 	e.wg.Add(1)
 	go func() {
@@ -90,19 +86,12 @@ func (e *Exporter) Start(ctx context.Context, inChan <-chan *core.AASUpdateEvent
 	}
 }
 
-// Keepalive parameters. Without these, a half-open connection (peer dies
-// without sending a TCP RST - power loss, cable pull, NAT/firewall dropping the
-// flow) leaves stream.Send blocked until the OS TCP retransmit timeout, which
-// defaults to ~15 minutes on Linux. With client keepalive, gRPC pings an idle
-// transport and tears it down within keepaliveTime+keepaliveTimeout, so the
-// sender goroutine's Send fails fast and the reconnect loop takes over in
-// seconds instead of minutes.
+// Keepalive parameters. Without these, a half-open connection leaves stream.Send
+// blocked until the OS TCP timeout (~15 minutes on Linux).
 //
-// NOTE: keepaliveTime is below the gRPC server's default enforcement MinTime
-// (5m), so the ingest server must permit this cadence (keepalive.EnforcementPolicy
-// with MinTime <= keepaliveTime and PermitWithoutStream: true) or it will send
-// GOAWAY "too_many_pings". Both sides are part of this integration, so they are
-// configured together.
+// keepaliveTime is below the gRPC server's default MinTime (5m), so the ingest
+// server must allow it (keepalive.EnforcementPolicy with MinTime <= keepaliveTime
+// and PermitWithoutStream: true) or it will send GOAWAY "too_many_pings".
 const (
 	keepaliveTime    = 20 * time.Second
 	keepaliveTimeout = 5 * time.Second

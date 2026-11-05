@@ -7,23 +7,15 @@ import (
 	"os"
 )
 
-// SecurityConfig holds transport security (TLS) and authentication settings
-// shared by every exporter. Every field is optional and defaults to the
-// protocol's historical insecure behavior, so existing configs keep working
-// unchanged; set tlsEnabled/username explicitly to opt in per exporter.
+// SecurityConfig holds TLS and authentication settings shared by every exporter.
+// All fields are optional; by default there is no TLS and access is anonymous.
 //
-// Interpretation is protocol-specific:
-//   - OPC UA client/server: TLSEnabled switches the secure channel from None
-//     to Basic256Sha256 (Sign+Encrypt); CertFile/KeyFile are the endpoint's
-//     own certificate/key.
-//   - MQTT/gRPC: TLSEnabled builds a standard tls.Config for the connection;
-//     CAFile pins a custom CA, InsecureSkipVerify disables server
-//     certificate verification (testing only).
-//   - HTTP: TLSEnabled serves over HTTPS using CertFile/KeyFile.
+//   - OPC UA: TLSEnabled uses Basic256Sha256 (Sign+Encrypt) with CertFile/KeyFile.
+//   - MQTT/gRPC: TLSEnabled builds a tls.Config. CAFile sets a custom CA and
+//     InsecureSkipVerify disables verification (testing only).
+//   - HTTP: TLSEnabled serves HTTPS using CertFile/KeyFile.
 //
-// Username/Password enable protocol-native authentication (OPC UA user
-// token, MQTT credentials, gRPC per-RPC basic auth, HTTP basic auth) when
-// set; anonymous/unauthenticated access is used otherwise.
+// Username/Password enable the protocol's own authentication when set.
 type SecurityConfig struct {
 	TLSEnabled         bool   `yaml:"tlsEnabled,omitempty"`
 	CertFile           string `yaml:"certFile,omitempty"`
