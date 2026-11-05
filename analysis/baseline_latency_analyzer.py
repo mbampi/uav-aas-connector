@@ -1,41 +1,16 @@
-"""Analyzes naive_baseline_metrics.csv / naive_baseline_mqtt_metrics.csv, the
-per-message latency logs produced by baseline/python-baseline-conn's main.py
-(OPC UA) and main_mqtt.py (MQTT), and reports the same descriptive statistics
-(mean/p50/p90/p95/p99/max), in the same table format as latency_analyzer.py
-and message_latency_analyzer.py, so the numbers can be placed directly next
-to the connector's own.
+"""Analyzes naive_baseline_metrics.csv / naive_baseline_mqtt_metrics.csv from
+baseline/python-baseline-conn, printing the same statistics as
+latency_analyzer.py and message_latency_analyzer.py.
 
-Both baseline scripts already report one latency sample per MAVLink message
-(Processing_Latency_ms: translation + every derived property's write/publish,
-sequential and blocking) plus Queue_Wait_ms (time since the previous tracked
-message finished, capturing backlog from that same blocking design). This is
-the number to compare against
-message_latency_analyzer.py's "fully-completed messages only" column for the
-connector - NOT latency_analyzer.py's per-property numbers, which measure a
-different, finer-grained thing (see message_latency_analyzer.py's docstring).
+Compare these numbers with the "fully-completed messages only" output of
+message_latency_analyzer.py, not with latency_analyzer.py (which is per
+property).
 
-Both scripts also log a per-message Write_Success flag: a single write/publish
-failure - a transient OPC UA write error, or (for MQTT) a QoS 0 publish that
-never got confirmed within its wait timeout - is caught per message rather
-than crashing the whole run, and abandons whatever fields of that message
-were not yet written (see main.py's/main_mqtt.py's comments on this). Rows
-with Write_Success=False are latency numbers for an INCOMPLETE operation
-(a partial or zero-field write cut short by the failure) and are excluded
-from the latency statistics below, exactly as the connector's own
-"fully-completed messages only" column excludes traces that were coalesced
-before every property was sent - mixing them in would silently corrupt the
-distribution with times that don't represent a completed message. The
-success/failure counts themselves are reported separately, and are this
-baseline's own self-observed completeness signal - complementary to, not a
-replacement for, the external cross-check against the OPC UA server's/MQTT
-receiver's own log described below.
+Rows with Write_Success=False are the time until a failure, so they are left out
+of the latency stats and counted separately.
 
-If a `<CSV base>_delivery_summary.json` file exists next to the input CSV
-(written by either baseline script when run with SOURCE_TLOG_PATH set - see
-baseline/python-baseline-conn/README.md), its overall delivery ratio is
-printed too, clearly labeled as self-reported (not externally cross-checked
-against the OPC UA server's/MQTT receiver's own log, unlike the connector's
-own validated numbers - see EXPERIMENTS_SUMMARY.md Section 5).
+If a <CSV base>_delivery_summary.json is next to the CSV (written when
+SOURCE_TLOG_PATH is set), its delivery ratio is printed too, as self-reported.
 """
 import argparse
 import csv

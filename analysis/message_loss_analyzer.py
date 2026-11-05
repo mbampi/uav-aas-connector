@@ -1,67 +1,36 @@
-"""Splits the connector's "missing trace" gap (see EXPERIMENTS_SUMMARY.md
-Section 5) into intentional coalescing vs candidate real message loss,
-without needing a capture of the runtime instrumentation.DropCounter /
-CoalescedCounter values (which these experiments did not collect).
+"""Splits property updates that never reached {PROTOCOL}_SENT into coalesced
+updates and possible real loss, using only the logs from a run.
 
-Background: a MAVLink message enters at pkg/adapters/mavlink (stage
-ADAPTER), is broadcast by pkg/core (stage CORE), and is coalesced
-per-property - latest value wins - by the exporter (pkg/exporters/mqtt's
-coalesce.Coalescer or pkg/exporters/opcua_client's inline pendingUpdates
-map) before being sent (stage {PROTOCOL}_SENDING/_SENT). Three independent
-things can make a property update never reach SENT:
+A MAVLink message enters at pkg/adapters/mavlink (stage ADAPTER), is broadcast by
+pkg/core (stage CORE), and is coalesced per property by the exporter before being
+sent (stage {PROTOCOL}_SENDING/_SENT).
 
-  Tier 0 (pre-adapter): the dispatched MAVLink message never reached
-    handleFrame at all (UDP loss, gomavlib parse failure). Invisible to the
-    connector's own log; only detectable by comparing the *dispatch* log
-    (ground truth of what was actually sent for this run) against how many
-    distinct MAVLink messages produced an ADAPTER line.
+  Tier 0 (before the adapter): the message never reached handleFrame (UDP loss,
+    parse failure). Found by comparing the dispatch log with the distinct
+    messages that produced an ADAPTER line.
 
-  Tier 1 (adapter -> core): pkg/adapters/mavlink/mavlink.go always calls
-    instrumentation.Record("ADAPTER", ...) *before* attempting the
-    (non-blocking) send to core's inbound channel - the send only fails,
-    incrementing adapter.mavlink's DropCounter, if core isn't draining fast
-    enough. So any (TraceID, PropertyID) with an ADAPTER row but no CORE row
-    is an exact, unambiguous real drop - no inference needed.
+  Tier 1 (adapter -> core): instrumentation.Record("ADAPTER", ...) runs before
+    the non-blocking send to core, so an ADAPTER row with no CORE row is a real
+    drop.
 
-  Tier 2 (core -> sent): once CORE is logged, the exporter's coalescer keeps
-    only the latest pending value per property (SubmodelID.PropertyID) and
-    silently discards an older pending one the instant a newer update for
-    that same property arrives, before the old one is sent. This means: for
-    a given property, every update strictly before its LAST update in the
-    run is either sent, or was superseded by that later update (or a chain
-    of them) - i.e. is provably coalesced, not lost. Only a property's LAST
-    update in the run, if it also lacks {PROTOCOL}_SENT, cannot be explained
-    by coalescing (nothing came after it to supersede it) - this "residual"
-    bucket is the candidate-real-loss signal. It is further split by
-    comparing each residual entry's CORE timestamp against how close it is
-    to the end of the log: an entry within this run's own observed
-    worst-case CORE->SENT latency of the log's last timestamp may simply
-    still have been in flight when the process/log stopped, which is not a
-    defect; anything further back is unexplained by that and is the best
-    available estimate of genuine loss at this tier (core.broadcast.<name>
-    channel-full, an OPC UA batch abandoned after a failed write+retry, or a
-    value still pending in the coalescer when Stop()/WaitDrain's ctx was
-    canceled - see coalesce.go's WaitDrain, which drops any still-pending
-    batch on shutdown without incrementing any counter at all).
+  Tier 2 (core -> sent): the coalescer replaces an older pending value when a
+    newer one arrives, so any update before a property's last one was either
+    sent or coalesced. Only a last update with no SENT line can be real loss.
+    Entries within the run's worst CORE->SENT latency of the end of the log may
+    just have been in flight. Older ones are the estimate of real loss
+    (core.broadcast.<name> full, an OPC UA batch abandoned after a failed retry,
+    or a value still pending at shutdown, which WaitDrain drops without
+    counting).
 
-Known blind spot (stated rather than hidden): core.broadcast.<name> can also
-drop a *non-final* update for a property (its bounded, per-subscriber 1000
-channel is full). That looks identical, from timestamps alone, to
-coalescing, unless it happens to land on a property's last update of the
-run. Put()/pendingUpdates never block on this channel, so it filling is
-expected to be rare to nonexistent - but it cannot be proven at zero from
-this log alone. Only the live DropCounter("core.broadcast.<name>") would
-close that last sliver.
+Blind spot: core.broadcast.<name> can also drop a non-final update when its
+channel is full. From timestamps alone that looks like coalescing, and only the
+live DropCounter("core.broadcast.<name>") can tell them apart.
 
-Inputs, all already produced by these experiments (no re-run needed):
-  - the connector's own latency_*.log (ADAPTER/CORE/{PROTOCOL}_SENDING/SENT)
-  - that run's dispatch_connector_*.csv (ground truth of what was actually
-    replayed for that specific run - used instead of re-parsing the source
-    .tlog, since it's already synchronized to this run's actual timestamps
-    and message set)
-  - the mapping YAML that was active for the run (config/mappings/*.yaml),
-    to know which dispatched message types the adapter could ever emit an
-    ADAPTER line for (unmapped types, e.g. PARAM_VALUE, never produce one)
+Inputs:
+  - the connector's latency_*.log
+  - that run's dispatch_connector_*.csv
+  - the mapping YAML used for the run, to know which message types can produce
+    an ADAPTER line
 """
 import argparse
 import csv

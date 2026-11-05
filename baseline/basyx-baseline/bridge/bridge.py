@@ -53,24 +53,13 @@ TRACKED_MESSAGE_TYPES = [
     'OPEN_DRONE_ID_SYSTEM',
 ]
 
-# Submodel ids, matching ../aas_definitions/uav_environment.json (converted
-# 1:1 from config/aas/quad_op.json - same ids, same idShorts, regenerable via
-# ../aas_definitions/generate_environment.py).
+# Submodel ids, matching ../aas_definitions/uav_environment.json.
 #
-# Every do_patch() call below is hand-duplicated from
-# config/mappings/mavlink_ops.yaml (same source, same scale factors/sentinels
-# as ../python-baseline-conn/main.py's node writes), not generated from it -
-# verified entry-by-entry against that file 2026-08-09 via
-# ../verify_mapping.py, which re-run after any change to either file.
-# Two categories of YAML entries are intentionally NOT implemented here,
-# matching main.py exactly:
-#   - OPEN_DRONE_ID_SYSTEM.UaType: not a real field on this MAVLink message
-#     (it belongs to OPEN_DRONE_ID_BASIC_ID) - the Go connector's own
-#     reflection-based field lookup silently no-ops on it too, so leaving it
-#     unmapped matches the actual system under comparison, not just this
-#     baseline's convenience.
-#   - ESC_STATUS.*: not in this project's installed pymavlink dialect, and
-#     not emitted by the synthetic replay traces - see TRACKED_MESSAGE_TYPES.
+# The do_patch() calls below are written by hand from
+# config/mappings/mavlink_ops.yaml. Run ../verify_mapping.py after changing either.
+# Not implemented, same as main.py:
+#   - OPEN_DRONE_ID_SYSTEM.UaType: not a real field on this message
+#   - ESC_STATUS.*: not in the installed pymavlink dialect
 SUBMODEL_IDS = {
     'Identification': 'urn:submodel:identification:001',
     'Status': 'urn:submodel:status:001',

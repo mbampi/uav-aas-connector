@@ -73,8 +73,7 @@ func TestDropSnapshot_SortedAndIncludesCounts(t *testing.T) {
 
 // TestReportBackpressure_LogsDropsAndCoalesces verifies the reporter actually
 // surfaces both outcomes: a recorded drop and a recorded coalesce each produce a
-// log line naming the point within one interval. This is the whole point of the
-// feature — backpressure is observable, not silent.
+// log line naming the point within one interval.
 func TestReportBackpressure_LogsDropsAndCoalesces(t *testing.T) {
 	var buf syncBuffer
 	prev := slog.Default()

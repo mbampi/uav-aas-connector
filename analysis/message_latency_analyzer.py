@@ -1,32 +1,14 @@
-"""Reconciles the connector's per-property latency log into a per-MESSAGE
-latency distribution, for a fair comparison against the naive baseline
-(baseline/python-baseline-conn), whose Processing_Latency_ms is a single
-number per MAVLink message covering that message's entire sequential,
-blocking write of every derived property.
+"""Groups the connector's per-property latency log by MAVLink message, to compare
+with the baseline's per-message Processing_Latency_ms.
 
-latency_analyzer.py reports one latency sample per (TraceID_ns, PropertyID)
-pair - i.e. per AAS property, not per MAVLink message. A single ATTITUDE
-message fans out into 6 properties (Roll, Pitch, Yaw, RollSpeed, PitchSpeed,
-YawSpeed), each logged and reported independently there. Comparing that
-per-property distribution directly against the baseline's per-message number
-would flatter the connector: the baseline's one latency figure already
-includes the cost of writing every one of those 6 fields, sequentially,
-before moving on; the connector's per-property figures do not.
+latency_analyzer.py reports one sample per AAS property. One ATTITUDE message
+becomes 6 properties, while the baseline's single number covers writing all 6.
+Here every line is grouped by TraceID_ns (assigned once at ingestion) and:
 
-The fair basis: group every log line by TraceID_ns (the timestamp assigned
-once, at ingestion, to the raw MAVLink message that produced it - shared by
-every property that message fans out into), and take
     message_latency = max(SENT timestamp across that trace's properties) - TraceID_ns
-i.e. "time until every property this message produced was fully sent" - the
-same quantity the baseline's Processing_Latency_ms represents.
 
-A trace can fan out into properties that never reach {PROTOCOL}_SENT for that
-specific trace, without that being data loss (Section III-D's coalescing: a
-newer trace's update to the same property can supersede this one's before it
-drains). Such traces are reported separately from fully-completed ones rather
-than silently mixed in, since "time until every property was sent" is not
-quite the same measurement for a message that produced a partial trace vs a
-full one - see the two_props printed per run below.
+A trace can have properties that never reach {PROTOCOL}_SENT because a newer
+update replaced them. Those traces are reported separately from completed ones.
 """
 import argparse
 import math

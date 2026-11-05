@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""Regenerates uav_environment.json from the connector's own AAS definition.
+"""Regenerates uav_environment.json from ../../../config/aas/quad_op.json.
 
-uav_environment.json is a mechanical wrapper around
-../../../config/aas/quad_op.json - the SAME submodels (same ids, idShorts,
-elements, values) the Go connector and python-baseline-conn both load, just
-wrapped in the official AAS V3 "Environment" JSON shape
-(assetAdministrationShells / submodels / conceptDescriptions) that BaSyx's
-aas-environment component expects (see ../README.md Phase 1). It adds one
-AssetAdministrationShell referencing all 7 submodels; it does not add,
-remove, rename, or restructure a single submodel element.
-
-Run this after any change to config/aas/quad_op.json to keep this baseline's
-AAS model in sync - do NOT hand-edit uav_environment.json's "submodels" key
-directly, since that guarantee is exactly what this script exists to keep:
+Wraps the same submodels in the AAS V3 "Environment" JSON shape that BaSyx's
+aas-environment component expects, and adds one AssetAdministrationShell
+referencing all 7. Run it after changing quad_op.json, and don't edit
+uav_environment.json's "submodels" by hand:
 
     python3 generate_environment.py
     git diff --stat uav_environment.json   # should be empty if quad_op.json didn't change

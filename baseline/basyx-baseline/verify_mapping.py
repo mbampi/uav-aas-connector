@@ -1,29 +1,17 @@
 #!/usr/bin/env python3
-"""Diffs both bridge implementations' property mappings against
-config/mappings/mavlink_ops.yaml, the source of truth both the Go connector
-and every naive baseline (this one included) are supposed to translate
-identically:
+"""Checks both bridges' property mappings against
+config/mappings/mavlink_ops.yaml:
 
-  - bridge/bridge.py's do_patch() calls (the naive, per-property baseline)
-  - bridge/bridge_batched.py's store.stage() calls (the batched/pipelined
-    client - same submodel/idShortPath targets, different transport)
-
-Both hand-duplicate this mapping rather than generating it from the YAML. Run
-this after any change to config/mappings/mavlink_ops.yaml or either bridge
-file's mapping section.
+  - bridge/bridge.py's do_patch() calls
+  - bridge/bridge_batched.py's store.stage() calls
 
     python3 verify_mapping.py
 
-Exit code is non-zero if either bridge maps a (submodel, idShortPath) that
-isn't in the YAML, or misses one that both (a) is in the YAML and (b) is
-technically writable - i.e. excluding the two known, documented gaps this
-baseline inherits from python-baseline-conn/main.py:
-  - OPEN_DRONE_ID_SYSTEM.UaType: not a real field on this MAVLink message
-    (it belongs to OPEN_DRONE_ID_BASIC_ID) - the Go connector's own
-    reflection-based lookup silently no-ops on it too.
-  - ESC_STATUS.*: not in this project's installed pymavlink dialect, and
-    not emitted by the synthetic replay traces (see main.py's comment on
-    TRACKED_MESSAGE_TYPES).
+Exits non-zero if a bridge maps a (submodel, idShortPath) that isn't in the YAML,
+or misses one that is. Two gaps are expected, same as
+python-baseline-conn/main.py:
+  - OPEN_DRONE_ID_SYSTEM.UaType: not a real field on this message
+  - ESC_STATUS.*: not in the installed pymavlink dialect
 """
 
 import os

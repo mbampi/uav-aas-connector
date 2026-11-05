@@ -41,15 +41,9 @@ services:
     # LAN IP without any port mapping.
     network_mode: host
 
-  # MQTT counterpart of python-baseline-conn above: same image, same naive
-  # single-threaded/blocking architecture and MAVLink message set, just
-  # publishing to an MQTT broker (main_mqtt.py) instead of writing to an OPC
-  # UA server (main.py). Deliberately given the SAME container_name as the
-  # OPC UA service - the two are never meant to run at the same time (both
-  # bind MAVLink UDP :14550 in host network mode, so starting both together
-  # would conflict anyway), and reusing the name lets metrics-collector's
-  # fixed TARGET_CONTAINER below work unmodified for whichever one is
-  # actually running. Bring this one up instead of python-baseline-conn with:
+  # MQTT version of the gateway above (main_mqtt.py). It shares the container_name
+  # and UDP port 14550, so run only one of the two. The shared name lets
+  # metrics-collector monitor whichever is running:
   #   docker compose up -d --build python-baseline-conn-mqtt metrics-collector
   python-baseline-conn-mqtt:
     build: .
@@ -74,14 +68,8 @@ services:
 
     network_mode: host
 
-  # Same external, Docker-stats-based resource monitor used for the Go
-  # connector (uav-aas-connector/resource_metrics), copied here verbatim so
-  # CPU/Memory are sampled identically (same formulas, same ~2s cadence, same
-  # CSV schema) for both systems under comparison. This container's own
-  # process-level psutil CPU_Percent/Memory_MB columns in
-  # naive_baseline_metrics.csv are a secondary, in-process signal only - this
-  # sidecar's uav-aas-connector-style CSV in ./metrics is the one to use for
-  # any cross-system comparison against the Go connector's numbers.
+  # Docker-stats resource monitor, an exact copy of the connector's
+  # resource_metrics. Use its CSV to compare CPU and memory with the connector.
   metrics-collector:
     build: ./resource_metrics
     container_name: metrics-collector

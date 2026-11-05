@@ -94,19 +94,9 @@ def b64url(raw):
 
 SUBMODEL_IDS_B64 = {k: b64url(v) for k, v in SUBMODEL_IDS.items()}
 
-# uav_environment.json is the single source of truth for both the initial
-# state mirror below AND the AAS BaSyx itself loads at startup - reading it
-# here (rather than hand-duplicating the schema a second time) means this
-# bridge's notion of "every property in each submodel" can never drift from
-# what's actually preconfigured in BaSyx, which matters a lot given the
-# full-replace semantics documented above: a stale/incomplete local schema
-# would silently delete real elements on the first flush.
-#
-# Defaults to the path relative to this file (correct for local/non-Docker
-# runs, where bridge/ and aas_definitions/ are siblings on the same
-# checkout) - overridable via env var because the Docker build context is
-# just ./bridge (see ../docker-compose.yml), so the container instead mounts
-# ../aas_definitions as a volume and points this at that mount.
+# Same file BaSyx loads at startup, so the mirror matches its schema. An incomplete
+# schema would delete elements on the first flush. In Docker it's mounted as a
+# volume, since the build context is just ./bridge.
 AAS_ENVIRONMENT_PATH = os.environ.get(
     'AAS_ENVIRONMENT_PATH',
     os.path.join(os.path.dirname(__file__), '..', 'aas_definitions', 'uav_environment.json'),
