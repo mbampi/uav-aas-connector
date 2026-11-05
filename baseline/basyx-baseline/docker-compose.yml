@@ -1,0 +1,129 @@
+services:
+  # Off-the-shelf Eclipse BaSyx V2 AAS Environment - aggregates the AAS,
+  # Submodel and ConceptDescription repositories into one component, backed
+  # by the in-memory store (see ./application.properties). Naive/out-of-the-
+  # box on purpose: no MongoDB, no separate registries, no auth, no tuning.
+  basyx-aas-env:
+    # No plain "2.0.0" tag exists on Docker Hub yet (checked 2026-08-09) -
+    # 2.0.0-milestone-15 is the latest pinned milestone release; swap for
+    # 2.0.0-SNAPSHOT if you specifically want the rolling latest build.
+    image: eclipsebasyx/aas-environment:2.0.0-milestone-15
+    container_name: basyx-aas-env
+    restart: unless-stopped
+
+    volumes:
+      # EDIT ./application.properties before starting: mqtt.hostname must
+      # point at your MacBook's LAN IP (see README.md Phase 1).
+      - ./application.properties:/application/application.properties
+      # Preconfigured AAS/Submodel environment, loaded once at startup.
+      - ./aas_definitions:/application/aas
+
+    # 'host' network mode, same rationale as python-baseline-conn: avoids
+    # Docker NAT overhead and lets the bridge container reach BaSyx over
+    # localhost without any port mapping.
+    network_mode: host
+
+  # The naive MAVLink-to-BaSyx ingestion bridge (bridge/bridge.py) - BaSyx
+  # has no native MAVLink ingestion, so this is the "practitioner writes a
+  # quick translation script" component that a real BaSyx deployment for
+  # this use case would need. Single-threaded, sequential, blocking REST
+  # PATCHes - no batching, no coalescing, no worker pool. See ../README.md.
+  basyx-bridge:
+    build: ./bridge
+    container_name: basyx-bridge
+    restart: unless-stopped
+    user: root
+
+    # devices:
+        # - "/dev/ttyUSB0:/dev/ttyUSB0" # Radio (only needed if MAVLINK_CONNECTION_STRING below is switched to a serial device instead of UDP)
+
+    environment:
+      # Input: MAVLink source. Defaults to listening for UDP on all
+      # interfaces, port 14550 - the sending device (or the MacBook's
+      # mavlink-replay) must stream telemetry to this Pi's IP on that port.
+      - MAVLINK_CONNECTION_STRING=udp:0.0.0.0:14550
+      # Output: BaSyx AAS Environment this bridge PATCHes telemetry into.
+      # 'localhost' works because both containers use network_mode: host.
+      - BASYX_BASE_URL=http://127.0.0.1:8081
+      - CSV_FILENAME=/app/metrics/basyx_baseline_bridge_metrics.csv
+      # Optional, only for controlled benchmark replays (leave unset for a
+      # real/live drone on this Pi): path to the exact .tlog file being fed
+      # in via mavlink-replay's replay.py. Enables a real per-type delivery
+      # ratio (see ../python-baseline-conn/README.md - same mechanism).
+      # - SOURCE_TLOG_PATH=/app/data/synth_50hz_15min.tlog
+
+    volumes:
+      - ./metrics:/app/metrics
+
+    network_mode: host
+
+  # Batched, pipelined, connection-pooled alternative to basyx-bridge above -
+  # NOT the naive baseline. Maintains an in-memory mirror of every
+  # submodel's current property values and flushes each changed submodel as
+  # ONE whole-submodel PATCH .../$value, with different submodels' flushes
+  # dispatched concurrently. Exists to measure BaSyx's actual throughput
+  # ceiling under the batching its own API invites, rather than only the
+  # naive per-property discipline - see ./bridge/bridge_batched.py's module
+  # docstring. Same image as basyx-bridge, different
+  # entrypoint; never run both bridge services against the same live
+  # MAVLink source/BaSyx instance at once (same host-network MAVLink
+  # UDP :14550 port conflict as python-baseline-conn's two gateway
+  # variants) - pick one per run with the commands in README.md Phase 4.
+  basyx-bridge-batched:
+    build: ./bridge
+    container_name: basyx-bridge
+    entrypoint: ["python", "bridge_batched.py"]
+    restart: unless-stopped
+    user: root
+
+    environment:
+      - MAVLINK_CONNECTION_STRING=udp:0.0.0.0:14550
+      - BASYX_BASE_URL=http://127.0.0.1:8081
+      - INGESTION_CSV_FILENAME=/app/metrics/basyx_batched_ingestion_metrics.csv
+      - FLUSH_CSV_FILENAME=/app/metrics/basyx_batched_flush_metrics.csv
+      # No flush interval: each submodel flushes as soon as it has pending
+      # changes and isn't already mid-flush.
+      # Build context is ./bridge, so aas_definitions/ isn't in the image -
+      # mounted below instead and pointed at from here.
+      - AAS_ENVIRONMENT_PATH=/app/aas_definitions/uav_environment.json
+      # - SOURCE_TLOG_PATH=/app/data/synth_50hz_15min.tlog
+
+    volumes:
+      - ./metrics:/app/metrics
+      - ./aas_definitions:/app/aas_definitions:ro
+
+    network_mode: host
+
+  # External, Docker-stats-based resource monitor - byte-for-byte copy of
+  # uav-aas-connector/resource_metrics (see ./resource_metrics), same as
+  # python-baseline-conn uses. BaSyx's naive architecture here has TWO
+  # components running on the Pi (the AAS Environment JVM and the bridge
+  # script), unlike the other baseline's single gateway process, so BOTH
+  # get their own collector instance below rather than folding them into
+  # one CPU/RAM number - see README.md Phase 5 for why that split
+  # matters for a fair resource-envelope comparison against the connector.
+  # The naive and batched bridge services share the same container_name
+  # (basyx-bridge, see above) - deliberate, same reason python-baseline-conn's
+  # two gateway variants do: metrics-collector-bridge below works unmodified
+  # against whichever bridge variant is actually running.
+  metrics-collector-basyx:
+    build: ./resource_metrics
+    container_name: metrics-collector-basyx
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./metrics:/output
+    environment:
+      - TARGET_CONTAINER=basyx-aas-env
+      - INTERVAL_SEC=0.5
+    restart: "no"
+
+  metrics-collector-bridge:
+    build: ./resource_metrics
+    container_name: metrics-collector-bridge
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./metrics:/output
+    environment:
+      - TARGET_CONTAINER=basyx-bridge
+      - INTERVAL_SEC=0.5
+    restart: "no"
